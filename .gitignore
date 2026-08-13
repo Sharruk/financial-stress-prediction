@@ -1,0 +1,25 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Jupyter Notebooks
+.ipynb_checkpoints/
+
+# IDE files
+.vscode/
+.idea/
+
+# Local model training submissions/checkpoints (do not upload large outputs to GitHub)
+data/submissions/zindi_stress_sub_*.csv
+data/submissions/zindi_stress_sub_*.zip
+models/*.pkl
+models/*.pt
+models/*.json
