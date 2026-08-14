@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 from scipy.optimize import minimize
 from scipy.stats import rankdata
-from sklearn.linear_model import LogisticRegression
+from sklearn.linear_model import LogisticRegression, RidgeClassifier
 from src.utils import evaluate_predictions, get_logger
 
 logger = get_logger()
@@ -16,8 +16,7 @@ def optimize_ensemble_weights(oof_dict, y_true):
     n_models = len(model_names)
     
     def loss_func(weights):
-        # Normalize weights to sum to 1
-        weights = weights / np.sum(weights)
+        weights = weights / (np.sum(weights) + 1e-9)
         blend_oof = np.dot(oof_matrix, weights)
         metrics = evaluate_predictions(y_true, blend_oof)
         return metrics['log_loss']
@@ -48,18 +47,21 @@ def compute_blend_predictions(oof_dict, test_dict, weights):
     return blend_oof, blend_test
 
 
-def compute_rank_average(test_dict, weights=None):
+def compute_rank_average(oof_dict, test_dict, weights=None):
     """
-    Rank average test predictions to mitigate probability calibration shifts across models.
+    Rank average test predictions to optimize ROC-AUC ranking consistency.
     """
-    model_names = list(test_dict.keys())
+    model_names = list(oof_dict.keys())
     n_models = len(model_names)
     if weights is None:
         weights = np.ones(n_models) / n_models
         
-    ranked_matrix = np.column_stack([rankdata(test_dict[m]) / len(test_dict[m]) for m in model_names])
-    rank_blend = np.dot(ranked_matrix, weights)
-    return rank_blend
+    ranked_oof_matrix = np.column_stack([rankdata(oof_dict[m]) / len(oof_dict[m]) for m in model_names])
+    ranked_test_matrix = np.column_stack([rankdata(test_dict[m]) / len(test_dict[m]) for m in model_names])
+    
+    rank_oof = np.dot(ranked_oof_matrix, weights)
+    rank_test = np.dot(ranked_test_matrix, weights)
+    return rank_oof, rank_test
 
 
 def train_stacking_meta_learner(oof_dict, test_dict, y_true):
@@ -71,7 +73,7 @@ def train_stacking_meta_learner(oof_dict, test_dict, y_true):
     oof_matrix = np.column_stack([oof_dict[m] for m in model_names])
     test_matrix = np.column_stack([test_dict[m] for m in model_names])
     
-    meta_model = LogisticRegression(C=1.0, random_state=42)
+    meta_model = LogisticRegression(C=0.5, random_state=42)
     meta_model.fit(oof_matrix, y_true)
     
     meta_oof = meta_model.predict_proba(oof_matrix)[:, 1]

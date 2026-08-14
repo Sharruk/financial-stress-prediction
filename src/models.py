@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 from lightgbm import LGBMClassifier
 from xgboost import XGBClassifier
-from sklearn.ensemble import RandomForestClassifier, ExtraTreesClassifier
+from sklearn.ensemble import RandomForestClassifier, ExtraTreesClassifier, HistGradientBoostingClassifier
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LogisticRegression
 from src.config import SEED
@@ -19,43 +19,66 @@ try:
 except ImportError:
     TORCH_AVAILABLE = False
 
-# PyTorch Tabular Neural Network Definition
+# High-Performance PyTorch Tabular Neural Network with Residual connections
 if TORCH_AVAILABLE:
-    class TabularMLP(nn.Module):
-        def __init__(self, input_dim, hidden_dims=[128, 64, 32], dropout=0.2):
+    class TabularResMLP(nn.Module):
+        def __init__(self, input_dim, hidden_dim=128, dropout=0.2):
             super().__init__()
-            layers = []
-            in_dim = input_dim
-            for h_dim in hidden_dims:
-                layers.append(nn.Linear(in_dim, h_dim))
-                layers.append(nn.BatchNorm1d(h_dim))
-                layers.append(nn.ReLU())
-                layers.append(nn.Dropout(dropout))
-                in_dim = h_dim
-            layers.append(nn.Linear(in_dim, 1))
-            layers.append(nn.Sigmoid())
-            self.network = nn.Sequential(*layers)
+            self.input_layer = nn.Sequential(
+                nn.Linear(input_dim, hidden_dim),
+                nn.BatchNorm1d(hidden_dim),
+                nn.Mish(),
+                nn.Dropout(dropout)
+            )
+            # Residual Block 1
+            self.res1 = nn.Sequential(
+                nn.Linear(hidden_dim, hidden_dim),
+                nn.BatchNorm1d(hidden_dim),
+                nn.Mish(),
+                nn.Dropout(dropout),
+                nn.Linear(hidden_dim, hidden_dim),
+                nn.BatchNorm1d(hidden_dim)
+            )
+            # Residual Block 2
+            self.res2 = nn.Sequential(
+                nn.Linear(hidden_dim, hidden_dim // 2),
+                nn.BatchNorm1d(hidden_dim // 2),
+                nn.Mish(),
+                nn.Dropout(dropout),
+                nn.Linear(hidden_dim // 2, hidden_dim // 2),
+                nn.BatchNorm1d(hidden_dim // 2)
+            )
+            self.proj = nn.Linear(hidden_dim, hidden_dim // 2)
+            self.head = nn.Sequential(
+                nn.Mish(),
+                nn.Linear(hidden_dim // 2, 1),
+                nn.Sigmoid()
+            )
             
         def forward(self, x):
-            return self.network(x).squeeze(-1)
+            x0 = self.input_layer(x)
+            x1 = x0 + self.res1(x0)
+            x2 = self.proj(x1) + self.res2(x1)
+            return self.head(x2).squeeze(-1)
 
 def get_model(model_name, params=None):
     """
-    Factory function to instantiate models with optimal default parameters.
+    Factory function to instantiate models with top-tier hyperparameters.
     """
     p = params or {}
     
     if model_name.lower() == "lightgbm":
         default_params = {
-            'n_estimators': 800,
-            'learning_rate': 0.03,
-            'num_leaves': 31,
-            'max_depth': 6,
-            'subsample': 0.8,
-            'colsample_bytree': 0.7,
-            'reg_alpha': 0.1,
-            'reg_lambda': 1.0,
-            'scale_pos_weight': 1.5,
+            'n_estimators': 1200,
+            'learning_rate': 0.02,
+            'num_leaves': 39,
+            'max_depth': 7,
+            'subsample': 0.85,
+            'colsample_bytree': 0.65,
+            'min_child_samples': 25,
+            'reg_alpha': 0.2,
+            'reg_lambda': 1.5,
+            'scale_pos_weight': 1.25,
             'random_state': SEED,
             'n_jobs': -1,
             'verbose': -1
@@ -65,14 +88,15 @@ def get_model(model_name, params=None):
         
     elif model_name.lower() == "xgboost":
         default_params = {
-            'n_estimators': 700,
-            'learning_rate': 0.03,
-            'max_depth': 5,
-            'subsample': 0.8,
-            'colsample_bytree': 0.7,
-            'reg_alpha': 0.1,
-            'reg_lambda': 1.0,
-            'scale_pos_weight': 1.5,
+            'n_estimators': 1000,
+            'learning_rate': 0.02,
+            'max_depth': 6,
+            'subsample': 0.85,
+            'colsample_bytree': 0.65,
+            'min_child_weight': 4,
+            'reg_alpha': 0.2,
+            'reg_lambda': 2.0,
+            'scale_pos_weight': 1.25,
             'random_state': SEED,
             'n_jobs': -1,
             'eval_metric': 'logloss',
@@ -80,14 +104,27 @@ def get_model(model_name, params=None):
         }
         default_params.update(p)
         return XGBClassifier(**default_params)
+
+    elif model_name.lower() == "hist_gbm":
+        default_params = {
+            'max_iter': 800,
+            'learning_rate': 0.025,
+            'max_leaf_nodes': 35,
+            'max_depth': 7,
+            'min_samples_leaf': 25,
+            'l2_regularization': 1.5,
+            'random_state': SEED
+        }
+        default_params.update(p)
+        return HistGradientBoostingClassifier(**default_params)
         
     elif model_name.lower() == "random_forest":
         default_params = {
-            'n_estimators': 300,
-            'max_depth': 14,
-            'min_samples_split': 10,
-            'min_samples_leaf': 4,
-            'max_features': 'sqrt',
+            'n_estimators': 400,
+            'max_depth': 16,
+            'min_samples_split': 8,
+            'min_samples_leaf': 3,
+            'max_features': 0.25,
             'class_weight': 'balanced_subsample',
             'random_state': SEED,
             'n_jobs': -1
@@ -97,11 +134,11 @@ def get_model(model_name, params=None):
         
     elif model_name.lower() == "extra_trees":
         default_params = {
-            'n_estimators': 300,
-            'max_depth': 14,
-            'min_samples_split': 10,
-            'min_samples_leaf': 4,
-            'max_features': 'sqrt',
+            'n_estimators': 400,
+            'max_depth': 16,
+            'min_samples_split': 8,
+            'min_samples_leaf': 3,
+            'max_features': 0.25,
             'class_weight': 'balanced_subsample',
             'random_state': SEED,
             'n_jobs': -1
@@ -136,7 +173,7 @@ class PyTorchMLPWrapper:
         self.epochs = self.params.get('epochs', 25)
         self.lr = self.params.get('lr', 1e-3)
         self.batch_size = self.params.get('batch_size', 256)
-        self.hidden_dims = self.params.get('hidden_dims', [128, 64, 32])
+        self.hidden_dim = self.params.get('hidden_dim', 128)
         self.dropout = self.params.get('dropout', 0.2)
         self.scaler = StandardScaler()
         self.model = None
@@ -149,7 +186,7 @@ class PyTorchMLPWrapper:
         dataset = TensorDataset(X_tensor, y_tensor)
         dataloader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
         
-        self.model = TabularMLP(input_dim=X.shape[1], hidden_dims=self.hidden_dims, dropout=self.dropout)
+        self.model = TabularResMLP(input_dim=X.shape[1], hidden_dim=self.hidden_dim, dropout=self.dropout)
         optimizer = optim.AdamW(self.model.parameters(), lr=self.lr, weight_decay=1e-4)
         criterion = nn.BCELoss()
         

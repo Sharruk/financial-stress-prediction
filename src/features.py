@@ -10,8 +10,8 @@ logger = get_logger()
 
 def compute_linear_slope(y_matrix):
     """
-    Computes linear slope across 6 months (x = [1, 2, 3, 4, 5, 6] representing m6 to m1)
-    y_matrix is shape (N, 6) where col 0 is M6 and col 5 is M1.
+    Computes linear slope across 6 months (x = [1, 2, 3, 4, 5, 6] representing m6 to m1).
+    y_matrix shape: (N, 6) where column 0 is M6 (oldest) and column 5 is M1 (most recent).
     """
     x = np.array([1, 2, 3, 4, 5, 6], dtype=np.float32)
     x_mean = 3.5
@@ -22,28 +22,51 @@ def compute_linear_slope(y_matrix):
     slopes = np.sum((y_matrix - y_mean) * weights, axis=1) / x_var
     return slopes
 
+def compute_shannon_entropy(matrix):
+    """
+    Computes Shannon entropy across transaction streams.
+    High entropy = diversified spending; Low entropy = concentrated / distress spending.
+    """
+    row_sums = np.sum(matrix, axis=1, keepdims=True) + 1e-7
+    p = matrix / row_sums
+    p_safe = np.where(p > 0, p, 1.0)
+    entropy = -np.sum(p * np.log(p_safe + 1e-9), axis=1)
+    return entropy
+
 def engineer_features(data_df):
     """
-    Main feature engineering pipeline generating high-signal domain features.
-    Builds new features cleanly to avoid fragmentation.
+    Advanced Feature Engineering Pipeline for Financial Stress Prediction.
+    Extracts ~330+ domain, temporal, volatility, peer-relative, and behavioral signals.
     """
-    logger.info("Starting feature engineering pipeline...")
+    logger.info("Starting advanced feature engineering pipeline...")
     df = data_df.copy()
     new_cols = {}
     
-    # 1. Profile & Interaction Features
-    logger.info("Computing profile & interaction features...")
+    # -------------------------------------------------------------
+    # 1. Profile, Interactions & Peer-Relative Ratios
+    # -------------------------------------------------------------
+    logger.info("Computing profile, cross-interactions & peer benchmarks...")
     new_cols['arpu_per_age'] = df['arpu'] / (df['age'] + 1.0)
+    new_cols['activity_per_age'] = df['x_90_d_activity_rate'] / (df['age'] + 1.0)
+    new_cols['arpu_activity_interact'] = df['arpu'] * df['x_90_d_activity_rate']
+    
     age_groups = pd.cut(df['age'], bins=[0, 25, 35, 50, 100], labels=['under_25', '25_35', '35_50', 'over_50']).astype(str)
     new_cols['age_group'] = age_groups
     
     segment_earning = df['segment'].astype(str) + "_" + df['earning_pattern'].astype(str)
     region_smartphone = df['region'].astype(str) + "_" + df['smartphone'].astype(str)
+    region_segment = df['region'].astype(str) + "_" + df['segment'].astype(str)
     new_cols['segment_earning'] = segment_earning
     new_cols['region_smartphone'] = region_smartphone
+    new_cols['region_segment'] = region_segment
     
-    # Frequency Encoding for categoricals
-    cat_df = pd.DataFrame({'age_group': age_groups, 'segment_earning': segment_earning, 'region_smartphone': region_smartphone})
+    # Frequency Encoding
+    cat_df = pd.DataFrame({
+        'age_group': age_groups,
+        'segment_earning': segment_earning,
+        'region_smartphone': region_smartphone,
+        'region_segment': region_segment
+    })
     for c in CATEGORICAL_COLS:
         cat_df[c] = df[c]
         
@@ -51,28 +74,69 @@ def engineer_features(data_df):
         freq = cat_df[c].value_counts(normalize=True).to_dict()
         new_cols[f'{c}_freq'] = cat_df[c].map(freq).astype(np.float32)
 
-    # 2. Balance Features (M1 = most recent, M6 = oldest)
-    logger.info("Computing balance trend & volatility features...")
-    bal_matrix = df[BALANCE_COLS[::-1]].values.astype(np.float32) # Order from M6 (col 0) to M1 (col 5)
+    # Peer relative group benchmarks
+    for group_col in ['segment', 'region', 'earning_pattern']:
+        grp_arpu = df.groupby(group_col)['arpu'].transform('mean')
+        grp_act = df.groupby(group_col)['x_90_d_activity_rate'].transform('mean')
+        grp_m1_bal = df.groupby(group_col)['m1_daily_avg_bal'].transform('mean')
+        
+        new_cols[f'arpu_vs_{group_col}_mean'] = df['arpu'] / (grp_arpu + 1.0)
+        new_cols[f'activity_vs_{group_col}_mean'] = df['x_90_d_activity_rate'] / (grp_act + 1e-4)
+        new_cols[f'm1_bal_vs_{group_col}_mean'] = df['m1_daily_avg_bal'] / (grp_m1_bal + 1.0)
+
+    # -------------------------------------------------------------
+    # 2. Balance Trajectory, Volatility & Stress Position
+    # -------------------------------------------------------------
+    logger.info("Computing balance trends, acceleration & drawdown metrics...")
+    # Matrix ordered M6 (oldest, col 0) to M1 (most recent, col 5)
+    bal_matrix = df[BALANCE_COLS[::-1]].values.astype(np.float32)
     
     new_cols['bal_slope'] = compute_linear_slope(bal_matrix)
     new_cols['bal_mean'] = np.mean(bal_matrix, axis=1)
     new_cols['bal_std'] = np.std(bal_matrix, axis=1)
     new_cols['bal_min'] = np.min(bal_matrix, axis=1)
     new_cols['bal_max'] = np.max(bal_matrix, axis=1)
+    new_cols['bal_cv'] = new_cols['bal_std'] / (new_cols['bal_mean'] + 1.0)
+    
+    # Ratios and Differences
     new_cols['bal_m1_vs_m6_ratio'] = df['m1_daily_avg_bal'] / (df['m6_daily_avg_bal'] + 1.0)
     new_cols['bal_m1_vs_m6_diff'] = df['m1_daily_avg_bal'] - df['m6_daily_avg_bal']
-    new_cols['bal_recent_vs_hist_ratio'] = (df['m1_daily_avg_bal'] + df['m2_daily_avg_bal']) / (df[['m3_daily_avg_bal', 'm4_daily_avg_bal', 'm5_daily_avg_bal', 'm6_daily_avg_bal']].mean(axis=1) + 1.0)
-    new_cols['bal_cv'] = new_cols['bal_std'] / (new_cols['bal_mean'] + 1.0)
+    new_cols['bal_m1_vs_m2_diff'] = df['m1_daily_avg_bal'] - df['m2_daily_avg_bal']
+    new_cols['bal_m1_vs_m2_ratio'] = df['m1_daily_avg_bal'] / (df['m2_daily_avg_bal'] + 1.0)
+    
+    hist_bal_avg = df[['m3_daily_avg_bal', 'm4_daily_avg_bal', 'm5_daily_avg_bal', 'm6_daily_avg_bal']].mean(axis=1)
+    new_cols['bal_recent_vs_hist_ratio'] = (df['m1_daily_avg_bal'] + df['m2_daily_avg_bal']) / (2.0 * (hist_bal_avg + 1.0))
+    
+    # Acceleration / 2nd derivative: is balance deterioration speeding up?
+    # (m1 - m2) - (m2 - m3)
+    new_cols['bal_acceleration'] = (df['m1_daily_avg_bal'] - df['m2_daily_avg_bal']) - (df['m2_daily_avg_bal'] - df['m3_daily_avg_bal'])
+    
+    # Proximity to 6-month historical minimum balance (Rock-Bottom score)
+    bal_range = new_cols['bal_max'] - new_cols['bal_min'] + 1e-4
+    new_cols['bal_rock_bottom_idx'] = (df['m1_daily_avg_bal'] - new_cols['bal_min']) / bal_range
+    new_cols['bal_is_all_time_low'] = (df['m1_daily_avg_bal'] <= (new_cols['bal_min'] + 1.0)).astype(np.float32)
+    
+    # Consecutive month-over-month balance drops count (0 to 5)
+    bal_drops = (
+        (df['m1_daily_avg_bal'] < df['m2_daily_avg_bal']).astype(int) +
+        (df['m2_daily_avg_bal'] < df['m3_daily_avg_bal']).astype(int) +
+        (df['m3_daily_avg_bal'] < df['m4_daily_avg_bal']).astype(int) +
+        (df['m4_daily_avg_bal'] < df['m5_daily_avg_bal']).astype(int) +
+        (df['m5_daily_avg_bal'] < df['m6_daily_avg_bal']).astype(int)
+    )
+    new_cols['consecutive_bal_drops_count'] = bal_drops
 
-    # 3. Monthly Inflows and Outflows
-    logger.info("Computing monthly inflows, outflows & net cash flows...")
+    # -------------------------------------------------------------
+    # 3. Monthly Inflows, Outflows, Net Cashflows & Deficit Counts
+    # -------------------------------------------------------------
+    logger.info("Computing inflow/outflow dynamics, coverage & deficit counts...")
     inflow_types = ["deposit", "received", "transfer_from_bank"]
     outflow_types = ["withdraw", "paybill", "merchantpay", "mm_send"]
     
     m_inflows = []
     m_outflows = []
     m_nets = []
+    m_deficit_flags = []
     
     for m in range(1, 7):
         m_str = f"m{m}"
@@ -90,7 +154,13 @@ def engineer_features(data_df):
         new_cols[f'{m_str}_net_cashflow'] = net
         m_nets.append(net)
         
+        # Deficit flag (outflows exceeded inflows)
+        m_deficit_flags.append((net < 0).astype(int))
         new_cols[f'{m_str}_coverage_ratio'] = inflow / (outflow + 1.0)
+        new_cols[f'{m_str}_outflow_to_bal'] = outflow / (df[f'{m_str}_daily_avg_bal'] + 1.0)
+
+    # 6-Month Deficit Month Count (how many months ran negative cashflow?)
+    new_cols['total_deficit_months_6m'] = np.sum(m_deficit_flags, axis=0)
 
     inflow_matrix = np.column_stack([m_inflows[5-i] for i in range(6)]).astype(np.float32)
     outflow_matrix = np.column_stack([m_outflows[5-i] for i in range(6)]).astype(np.float32)
@@ -99,12 +169,32 @@ def engineer_features(data_df):
     new_cols['inflow_slope'] = compute_linear_slope(inflow_matrix)
     new_cols['outflow_slope'] = compute_linear_slope(outflow_matrix)
     new_cols['net_cashflow_slope'] = compute_linear_slope(net_matrix)
+    new_cols['net_cashflow_std'] = np.std(net_matrix, axis=1)
     
     new_cols['m1_outflow_to_bal_ratio'] = new_cols['m1_outflow_total'] / (df['m1_daily_avg_bal'] + 1.0)
     new_cols['m1_net_cashflow_vs_bal'] = new_cols['m1_net_cashflow'] / (df['m1_daily_avg_bal'] + 1.0)
+    new_cols['m1_vs_m6_net_cashflow_diff'] = new_cols['m1_net_cashflow'] - new_cols['m6_net_cashflow']
+    
+    # Inflow composition: Reliance on P2P gifts (received) vs Linked Bank vs Cash Deposit
+    for m in [1, 2]:
+        m_str = f"m{m}"
+        new_cols[f'{m_str}_p2p_inflow_reliance'] = df[f'{m_str}_received_total_value'] / (new_cols[f'{m_str}_inflow_total'] + 1.0)
+        new_cols[f'{m_str}_bank_inflow_reliance'] = df[f'{m_str}_transfer_from_bank_total_value'] / (new_cols[f'{m_str}_inflow_total'] + 1.0)
 
-    # 4. Aggregated Transaction Type Dynamics
-    logger.info("Computing transaction-level recency, slopes & ratios...")
+    # -------------------------------------------------------------
+    # 4. Outflow Diversity & Entropy (Distress Spending Concentration)
+    # -------------------------------------------------------------
+    logger.info("Computing spending diversity & Shannon entropy...")
+    m1_outflow_mat = df[[f"m1_{t}_total_value" for t in outflow_types]].values.astype(np.float32)
+    m6_outflow_mat = df[[f"m6_{t}_total_value" for t in outflow_types]].values.astype(np.float32)
+    new_cols['m1_outflow_entropy'] = compute_shannon_entropy(m1_outflow_mat)
+    new_cols['m6_outflow_entropy'] = compute_shannon_entropy(m6_outflow_mat)
+    new_cols['outflow_entropy_change'] = new_cols['m1_outflow_entropy'] - new_cols['m6_outflow_entropy']
+
+    # -------------------------------------------------------------
+    # 5. Transaction-Level Slopes, Ratios & Emergency Spikes
+    # -------------------------------------------------------------
+    logger.info("Computing transaction-level recency, slopes & emergency spikes...")
     drop_to_zero_flags = []
     
     for t in TRANSACTION_TYPES:
@@ -122,12 +212,18 @@ def engineer_features(data_df):
         new_cols[f'{t}_val_slope'] = compute_linear_slope(val_mat)
         new_cols[f'{t}_vol_slope'] = compute_linear_slope(vol_mat)
         
+        # Emergency Spike Ratio: Largest transaction in M1 vs total transaction value
+        new_cols[f'{t}_m1_highest_to_total_val'] = df[f'm1_{t}_highest_amount'] / (df[f'm1_{t}_total_value'] + 1.0)
+        
+        # Sudden silence in M1 flag
         hist_vol_sum = df[vol_cols[1:]].sum(axis=1)
         flag = ((hist_vol_sum > 0) & (df[f'm1_{t}_volume'] == 0)).astype(np.float32)
         new_cols[f'{t}_drop_to_zero_m1'] = flag
         drop_to_zero_flags.append(flag)
 
-    # 5. Counterparty Diversity & Intensity
+    # -------------------------------------------------------------
+    # 6. Counterparty Diversity & Intensity
+    # -------------------------------------------------------------
     logger.info("Computing counterparty intensity features...")
     for t, c_suffix in COUNTERPARTY_SUFFIX_MAP.items():
         m1_cp = f"m1_{t}_{c_suffix}"
@@ -139,9 +235,21 @@ def engineer_features(data_df):
         if m1_cp in df.columns and m6_cp in df.columns:
             new_cols[f'{t}_cp_m1_vs_m6_ratio'] = df[m1_cp] / (df[m6_cp] + 1.0)
 
-    # 6. Overall Activity Summary
-    logger.info("Computing overall activity summary features...")
+    # -------------------------------------------------------------
+    # 7. Activity & Composite Stress Signal
+    # -------------------------------------------------------------
+    logger.info("Computing overall activity summary & stress indexes...")
     new_cols['total_zero_activity_m1'] = np.sum(drop_to_zero_flags, axis=0)
+    
+    # Composite Heuristic Stress Index (combining acute warning signals)
+    # High score when: balance slope is negative, deficit months are high, coverage ratio is low, zero activities high
+    stress_idx = (
+        (-new_cols['bal_slope'] * 0.25) +
+        (new_cols['total_deficit_months_6m'] * 0.3) +
+        (new_cols['m1_outflow_to_bal_ratio'] * 0.2) +
+        (new_cols['total_zero_activity_m1'] * 0.25)
+    )
+    new_cols['composite_stress_index'] = stress_idx
     
     # Combine new features dataframe with original dataframe
     new_features_df = pd.DataFrame(new_cols, index=df.index)
@@ -151,5 +259,5 @@ def engineer_features(data_df):
     num_cols = df.select_dtypes(include=[np.number]).columns
     df[num_cols] = df[num_cols].replace([np.inf, -np.inf], np.nan).fillna(0.0)
     
-    logger.info(f"Feature engineering completed! Total columns: {df.shape[1]}")
+    logger.info(f"Advanced Feature engineering completed! Total columns: {df.shape[1]}")
     return df

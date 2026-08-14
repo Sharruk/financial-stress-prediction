@@ -12,14 +12,14 @@ from src.utils import set_seed, get_logger, evaluate_predictions, format_and_sav
 from src.data import load_raw_data
 from src.features import engineer_features
 from src.validation import train_cv_model
-from src.ensemble import optimize_ensemble_weights, compute_blend_predictions, train_stacking_meta_learner
+from src.ensemble import optimize_ensemble_weights, compute_blend_predictions, compute_rank_average, train_stacking_meta_learner
 
 logger = get_logger("train_pipeline")
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Zindi Financial Stress Prediction Training Pipeline")
-    parser.add_argument("--models", nargs="+", default=["lightgbm", "xgboost", "random_forest", "pytorch_mlp"],
-                        help="List of models to train (lightgbm, xgboost, random_forest, extra_trees, pytorch_mlp)")
+    parser.add_argument("--models", nargs="+", default=["lightgbm", "xgboost", "hist_gbm", "random_forest", "pytorch_mlp"],
+                        help="List of models to train (lightgbm, xgboost, hist_gbm, random_forest, extra_trees, pytorch_mlp)")
     parser.add_argument("--quick", action="store_true", help="Run quick baseline mode with fewer iterations")
     parser.add_argument("--seed", type=int, default=SEED, help="Random seed")
     return parser.parse_args()
@@ -29,7 +29,7 @@ def main():
     set_seed(args.seed)
     
     logger.info("==========================================================")
-    logger.info("   ZINDI FINANCIAL STRESS PREDICTION - MODEL PIPELINE V2  ")
+    logger.info("   ZINDI FINANCIAL STRESS PREDICTION - UPGRADED ENGINE V2 ")
     logger.info("==========================================================")
     
     # 1. Load Data
@@ -41,7 +41,7 @@ def main():
         train_df = train_df.sample(n=10000, random_state=args.seed).reset_index(drop=True)
     
     # 2. Engineer Features
-    logger.info("Running Feature Engineering Pipeline on Train and Test...")
+    logger.info("Running Advanced Feature Engineering Pipeline on Train and Test...")
     train_fe = engineer_features(train_df)
     test_fe = engineer_features(test_df)
     
@@ -55,17 +55,20 @@ def main():
         # Reduced iterations for fast verification
         lgb_params = {'n_estimators': 150, 'learning_rate': 0.05}
         xgb_params = {'n_estimators': 150, 'learning_rate': 0.05}
+        hgb_params = {'max_iter': 100, 'learning_rate': 0.05}
         rf_params = {'n_estimators': 100}
         mlp_params = {'epochs': 10}
     else:
-        lgb_params = {'n_estimators': 800, 'learning_rate': 0.03}
-        xgb_params = {'n_estimators': 700, 'learning_rate': 0.03}
-        rf_params = {'n_estimators': 300}
+        lgb_params = {'n_estimators': 1200, 'learning_rate': 0.02}
+        xgb_params = {'n_estimators': 1000, 'learning_rate': 0.02}
+        hgb_params = {'max_iter': 800, 'learning_rate': 0.025}
+        rf_params = {'n_estimators': 400}
         mlp_params = {'epochs': 25}
 
     param_map = {
         'lightgbm': lgb_params,
         'xgboost': xgb_params,
+        'hist_gbm': hgb_params,
         'random_forest': rf_params,
         'pytorch_mlp': mlp_params
     }
@@ -110,31 +113,39 @@ def main():
         logger.info("Computing Optimal Ensemble Weights...")
         best_weights, weight_dict = optimize_ensemble_weights(oof_dict, y_true)
         blend_oof, blend_test = compute_blend_predictions(oof_dict, test_dict, best_weights)
-        
         blend_metrics = evaluate_predictions(y_true, blend_oof)
         logger.info(f"==> OPTIMAL WEIGHTED BLEND OOF | Log Loss: {blend_metrics['log_loss']:.5f} | ROC-AUC: {blend_metrics['roc_auc']:.5f} <==")
+        
+        # Rank Averaging
+        rank_oof, rank_test = compute_rank_average(oof_dict, test_dict, best_weights)
+        rank_metrics = evaluate_predictions(y_true, rank_oof)
+        logger.info(f"==> RANK-AVERAGED BLEND OOF    | Log Loss: {rank_metrics['log_loss']:.5f} | ROC-AUC: {rank_metrics['roc_auc']:.5f} <==")
         
         # Stacking Meta Learner
         meta_oof, meta_test, meta_metrics = train_stacking_meta_learner(oof_dict, test_dict, y_true)
         
-        # Pick the best overall ensembling strategy
+        # Pick best strategy based on Log Loss & ROC-AUC
         if blend_metrics['log_loss'] <= meta_metrics['log_loss']:
-            logger.info("Selected OPTIMAL WEIGHTED BLEND for final submission.")
+            logger.info("Selected OPTIMAL WEIGHTED BLEND for final primary submission.")
             best_test_preds = blend_test
             final_oof_loss = blend_metrics['log_loss']
             final_oof_auc = blend_metrics['roc_auc']
         else:
-            logger.info("Selected STACKING META-LEARNER for final submission.")
+            logger.info("Selected STACKING META-LEARNER for final primary submission.")
             best_test_preds = meta_test
             final_oof_loss = meta_metrics['log_loss']
             final_oof_auc = meta_metrics['roc_auc']
+            
+        # Also save rank-averaged submission as alternative candidate
+        rank_sub_df = pd.DataFrame({ID_COL: test_df[ID_COL], 'Target': rank_test})
+        format_and_save_submission(rank_sub_df, sample_sub_df, SUBMISSION_DIR, prefix="zindi_stress_sub_rank")
     else:
         m_single = list(test_dict.keys())[0]
         best_test_preds = test_dict[m_single]
         final_oof_loss = summary_df.iloc[0]['Log Loss']
         final_oof_auc = summary_df.iloc[0]['ROC-AUC']
 
-    # 5. Build and Save Zindi Submission File
+    # 5. Build and Save Primary Zindi Submission File
     sub_df = pd.DataFrame({
         ID_COL: test_df[ID_COL],
         'Target': best_test_preds
@@ -146,8 +157,8 @@ def main():
     logger.info("                  TRAINING PIPELINE COMPLETE               ")
     logger.info(f" Final OOF Log Loss : {final_oof_loss:.5f}")
     logger.info(f" Final OOF ROC-AUC  : {final_oof_auc:.5f}")
-    logger.info(f" Submission CSV     : {csv_path}")
-    logger.info(f" Submission ZIP     : {zip_path}")
+    logger.info(f" Primary CSV Path   : {csv_path}")
+    logger.info(f" Latest CSV Path    : {SUBMISSION_DIR / 'submission.csv'}")
     logger.info("==========================================================")
 
 if __name__ == "__main__":

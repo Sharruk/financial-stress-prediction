@@ -1,0 +1,258 @@
+================================================================================
+   ZINDI FINANCIAL STRESS PREDICTION CHALLENGE - MASTER LEARNING & VIVA GUIDE
+================================================================================
+
+PROJECT: Mobile-Money Liquidity Stress Prediction Challenge
+PLATFORM: Zindi Competition Track
+TEAM: Sharruk S, Shalini M, Nathaniel Christian
+GOAL: Predict the probability of a customer experiencing liquidity/financial stress
+      within the next 30 days based on their profile and 6-month transaction history.
+
+================================================================================
+TABLE OF CONTENTS (CHRONOLOGICAL STEP-BY-STEP LEARNING JOURNEY)
+================================================================================
+STEP 1: Understanding the Business & ML Problem
+STEP 2: Dataset Anatomy & Exploration (EDA)
+STEP 3: The 85/15 Imbalance & Why Accuracy Fails
+STEP 4: Designing a Zero-Leakage 5-Fold Stratified Validation Harness
+STEP 5: Domain Feature Engineering (Transforming 184 Raw Cols to 340+ Signals)
+STEP 6: Model Architecture Selection (GBDT vs Random Forest vs Neural Nets)
+STEP 7: Multi-Model Ensembling, Blending & Rank Optimization
+STEP 8: Leaderboard Iterations & Score Interpretation (Log Loss vs ROC-AUC)
+STEP 9: How to Run the Complete Pipeline (CLI Commands)
+STEP 10: Master Viva / Professor Defense Q&A
+
+================================================================================
+STEP 1: UNDERSTANDING THE BUSINESS & ML PROBLEM
+================================================================================
+1. What is Liquidity Stress?
+   - A customer is in "liquidity stress" when they lack sufficient immediately
+     available cash or mobile-money balance to cover upcoming routine obligations
+     (e.g., utility paybills, food/merchant purchases, P2P transfers).
+   - A person may have historical wealth, but if cash inflows freeze and balances
+     drop below obligations, they suffer liquidity failure.
+
+2. The Machine Learning Framing:
+   - Observation Window: Trailing 6 months of customer transactions (M1 to M6).
+     * M1 = most recent month before observation date.
+     * M6 = oldest month (6 months ago).
+   - Target Horizon: 30 days forward into the future from observation date.
+   - Task: Binary Probability Classification.
+     * 0 = No liquidity stress in next 30 days.
+     * 1 = Liquidity stress occurs in next 30 days.
+   - Output: Continuous risk probability [0.0 to 1.0].
+
+================================================================================
+STEP 2: DATASET ANATOMY & EXPLORATION (EDA)
+================================================================================
+- Training Set (Train.csv): 40,000 rows x 184 columns.
+- Test Set (Test.csv): 30,000 rows x 183 columns (unlabeled).
+- Submission Target: Predict probability for all 30,000 test IDs.
+
+- Breakdown of the 184 Raw Columns:
+  1. Identifier (1 col): `ID` (Hexadecimal ID -> dropped from model input).
+  2. Customer Profile (7 cols):
+     - `arpu`: Average Revenue Per User.
+     - `age`: Customer age in years (18 to 70).
+     - `gender`: M / F.
+     - `region`: Geographic region (7 categories).
+     - `smartphone`: Yes / No.
+     - `segment`: Value tier (Low/Medium/High Value Customer: LVC, MVC, HVC).
+     - `earning_pattern`: Monthly / Weekly / Irregular Earner.
+  3. Mobile-Money Activity Rate (1 col):
+     - `x_90_d_activity_rate`: Proportion of active mobile-money days in last 90 days.
+  4. Daily Average Balances (6 cols):
+     - `m1_daily_avg_bal` to `m6_daily_avg_bal`.
+  5. Behavioral Transactions (168 cols):
+     - 7 Transaction Channels:
+       a. `paybill`: Utility / bill payments.
+       b. `merchantpay`: Merchant retail purchases.
+       c. `transfer_from_bank`: Inflows from linked bank account.
+       d. `mm_send`: Peer-to-peer mobile money sent.
+       e. `received`: Peer-to-peer mobile money received from friends/family.
+       f. `deposit`: Cash deposited via physical mobile-money agents.
+       g. `withdraw`: Cash withdrawn via physical agents.
+     - 4 Metrics Per Month per Channel:
+       * `_volume`: Count of transactions that month.
+       * `_total_value`: Sum of transacted money.
+       * `_highest_amount`: Largest single transaction that month.
+       * `_counterparty_count`: Unique entities interacted with (companies, merchants, banks, recipients, senders, agents).
+       * (7 channels x 6 months x 4 metrics = 168 behavioural columns).
+  6. Target Label (1 col): `liquidity_stress_next_30d` (Train only).
+
+================================================================================
+STEP 3: THE 85/15 IMBALANCE & WHY ACCURACY FAILS
+================================================================================
+1. The Observed Target Distribution:
+   - Class 0 (No Stress): 34,000 customers (85.0%)
+   - Class 1 (Stress):     6,000 customers (15.0%)
+
+2. Why Accuracy is a Misleading Metric:
+   - If a naive model predicts "0" for 100% of customers, it achieves 85% Accuracy!
+   - However, it detects exactly 0% of stressed customers, making it useless for business.
+
+3. The Proper Metrics:
+   - Log Loss (Binary Cross-Entropy): Evaluates calibrated probability certainty.
+     Penalizes confident wrong guesses heavily.
+   - ROC-AUC: Measures how accurately the model ranks stressed customers above
+     non-stressed customers across all possible decision thresholds.
+
+================================================================================
+STEP 4: DESIGNING A ZERO-LEAKAGE 5-FOLD STRATIFIED VALIDATION HARNESS
+================================================================================
+1. Why Stratified K-Fold?
+   - Regular K-Fold could randomly allocate too few positive stress cases into a fold.
+   - Stratified K-Fold guarantees that every single fold has the exact 85/15 ratio.
+
+2. Preventing Data Leakage (Strict Fold Isolation):
+   - What is Data Leakage? Using information from validation or test data during training.
+   - How We Solved It:
+     * Target Encoding and scaling are fit ONLY on the 80% training slice of each fold.
+     * The fitted mappings are then applied to the 20% validation slice and test data.
+     * No global target statistics ever leak across validation boundaries.
+
+3. Out-Of-Fold (OOF) Evaluation:
+   - OOF predictions produce an honest, unbiased assessment of leaderboard performance.
+
+================================================================================
+STEP 5: DOMAIN FEATURE ENGINEERING (EXPANDED TO 340+ FEATURES)
+================================================================================
+Raw monthly numbers are static. To detect stress, we engineered dynamic temporal patterns:
+
+A. Linear Temporal Slopes (M6 -> M1):
+   - Least-squares regression slope over 6 months ($M6 \rightarrow M1$).
+   - A negative `bal_slope` directly captures declining reserves.
+   - Slopes computed for net cash flow, inflows, outflows, and individual transaction volumes.
+
+B. Net Cash Flow & Liquidity Coverage:
+   - Monthly Inflow = `deposit` + `received` + `transfer_from_bank`.
+   - Monthly Outflow = `withdraw` + `paybill` + `merchantpay` + `mm_send`.
+   - Net Cash Flow = Inflow - Outflow.
+   - Liquidity Coverage Ratio = Inflow / (Outflow + 1.0).
+   - Deficit Months Count = Total months where Outflow exceeded Inflow.
+
+C. Stress Acceleration (Second Derivative):
+   - Formula: `(M1 - M2) - (M2 - M3)`.
+   - Captures whether a customer's decline is speeding up in the most recent month.
+
+D. Balance Volatility & Drawdown Distress:
+   - Balance Standard Deviation (`bal_std`) and Coefficient of Variation (`bal_cv`).
+   - Rock-Bottom Score: `(M1_bal - Min_bal) / (Max_bal - Min_bal + 1e-4)`.
+   - Consecutive balance drop counter (how many months in a row balance fell).
+
+E. Spending Diversity & Shannon Entropy:
+   - Shannon entropy across the 4 outflow channels.
+   - Stressed customers collapse spending diversity down to emergency cash withdrawals.
+
+F. Sudden Activity Drop-Offs (Silences):
+   - Flags customers who were consistently active in M2-M6 but showed 0 activity in M1.
+
+G. Peer-Relative Benchmarks:
+   - Customer ARPU and balance compared against their specific region and segment averages.
+
+H. Composite Heuristic Stress Index:
+   - Weighted composite index combining negative slope, high deficit months, low coverage,
+     and dropped channels (ranks in the Top 5 most important features across models).
+
+================================================================================
+STEP 6: MODEL ARCHITECTURE SELECTION
+================================================================================
+We trained multiple complementary model families:
+
+1. LightGBM (Light Gradient Boosting Machine):
+   - Fast histogram-based leaf-wise tree growth.
+   - Hyperparameters: 1200 trees, lr=0.02, num_leaves=39, colsample_bytree=0.65.
+   - Top strength: Handles non-linear feature interactions and high-dimensional signals.
+
+2. XGBoost (Extreme Gradient Boosting):
+   - Depth-wise tree boosting with strong L2 regularization (`reg_lambda=2.0`).
+   - Top strength: Robust against overfitting on noisy financial counters.
+
+3. HistGradientBoostingClassifier (Scikit-Learn):
+   - Native binned gradient boosting providing independent tree split decisions.
+
+4. Random Forest (Bagging):
+   - 400 randomized decision trees voting in parallel.
+   - Top strength: Drastically reduces variance and provides decorrelated predictions from boosting.
+
+5. PyTorch Deep Tabular ResMLP:
+   - Multi-layer Perceptron with BatchNorm, Mish activations, Dropout, and Residual Skip Connections.
+   - Top strength: Learns smooth, continuous representations that tree partitions cannot.
+
+================================================================================
+STEP 7: MULTI-MODEL ENSEMBLING, BLENDING & RANK OPTIMIZATION
+================================================================================
+Why Ensemble? Different models make different types of mistakes. Combining them lowers error.
+
+1. SLSQP Optimal Probability Blending:
+   - Uses SciPy Sequential Least Squares Programming to calculate optimal weights
+     $w_1, w_2, ..., w_k$ summing to 1.0 that minimize Out-of-Fold Log Loss:
+     $\min_w \text{LogLoss}(y_{true}, \sum w_i P_i)$
+   - Resulting blend: ~53% LightGBM + ~44% XGBoost + ~3% PyTorch MLP.
+
+2. Rank Averaging (ROC-AUC Optimization):
+   - Converts raw probabilities into uniform percentile ranks before averaging.
+   - Prevents calibration mismatch between models from hurting overall ROC-AUC ranking.
+
+================================================================================
+STEP 8: LEADERBOARD ITERATIONS & SCORE INTERPRETATION
+================================================================================
+Understanding the Scores on Zindi:
+1. When Evaluated on Log Loss (Error Metric):
+   - Lower is BETTER.
+   - Baseline / Neutral default: ~0.693 to 0.701.
+   - Upgraded Model: ~0.286 OOF (on full train), 0.6708 public.
+   - When score moved from 0.7013 down to 0.6708, the model error dropped (improved).
+
+2. When Evaluated on ROC-AUC (Ranking Metric):
+   - Higher is BETTER (1.0 is perfect).
+   - Our 5-fold CV achieves ~0.872 ROC-AUC on full dataset.
+
+3. Quick Mode vs Full Mode:
+   - Running with `--quick` trains on a small 10,000-row sample for quick code checks.
+   - Running full `python train.py` trains on all 40,000 samples for maximum performance.
+
+================================================================================
+STEP 9: EXECUTION GUIDE (STEP-BY-STEP COMMANDS)
+================================================================================
+1. Activate Environment (Windows Git Bash):
+   $ source venv/Scripts/activate
+
+2. Run Full Model Training:
+   $ python train.py
+
+3. Run Quick Test Mode (for fast verification):
+   $ python train.py --quick
+
+4. Submission Files Output:
+   - Primary Submission CSV: `model/data/submissions/submission.csv`
+   - Upload `submission.csv` directly to the Zindi competition portal.
+
+================================================================================
+STEP 10: MASTER VIVA / PROFESSOR DEFENSE Q&A
+================================================================================
+Q1: What is the core business objective and why is binary classification appropriate?
+A: The objective is early intervention for customers at risk of mobile-money liquidity
+   stress over a 30-day forward window. Since stress is an either/or event within a
+   fixed horizon, binary classification with calibrated probability output is the ideal formulation.
+
+Q2: Why not rely on standard accuracy for evaluation?
+A: The dataset has an 85% negative / 15% positive class imbalance. A trivial dummy
+   model predicting zero achieves 85% accuracy but is commercially useless. We evaluate
+   using Log Loss and ROC-AUC with Stratified 5-Fold Cross-Validation.
+
+Q3: How do you guarantee that no data leakage occurred in your pipeline?
+A: Preprocessing steps, such as categorical target encoding and scaling, are computed
+   strictly inside the training portion of each fold. Validation and test folds are
+   only transformed using pre-fitted fold statistics.
+
+Q4: What domain features proved most impactful in your feature engineering?
+A: The 6-month balance trajectory slope (`bal_slope`), the ratio of recent balance to
+   historical average (`bal_recent_vs_hist_ratio`), monthly net cashflow deficits,
+   and our Composite Heuristic Stress Index consistently ranked as top predictive signals.
+
+Q5: Why combine Gradient Boosted Trees with Deep Learning Neural Networks?
+A: GBDTs (LightGBM, XGBoost) excel at sharp, orthogonal partitioning on tabular data,
+   while Neural Networks (PyTorch ResMLP) learn continuous manifold embeddings.
+   Ensembling both via SLSQP constrained optimization cancels out individual model bias.
+================================================================================
