@@ -19,7 +19,9 @@ from src.ensemble import (
     compute_blend_predictions,
     compute_logit_blend,
     compute_rank_average,
-    train_stacking_meta_learner
+    train_stacking_meta_learner,
+    calibrate_temperature,
+    apply_temperature_scaling
 )
 from src.persistence import (
     prepare_full_features,
@@ -35,8 +37,8 @@ def parse_args():
     parser.add_argument(
         "--models",
         nargs="+",
-        default=["lightgbm", "lightgbm_dart", "xgboost", "hist_gbm", "random_forest", "pytorch_mlp"],
-        help="List of models to train (lightgbm, lightgbm_dart, xgboost, hist_gbm, random_forest, extra_trees, pytorch_mlp)"
+        default=["lightgbm", "lightgbm_dart", "xgboost", "hist_gbm", "extra_trees", "pytorch_mlp"],
+        help="List of models to train (lightgbm, lightgbm_dart, xgboost, hist_gbm, extra_trees, random_forest, pytorch_mlp)"
     )
     parser.add_argument("--quick", action="store_true", help="Run quick baseline mode with fewer iterations on subsample")
     parser.add_argument("--folds", type=int, default=None, help="Number of cross-validation folds (default: 10 full, 5 quick)")
@@ -50,7 +52,7 @@ def main():
     n_splits = args.folds if args.folds is not None else (5 if args.quick else N_SPLITS)
 
     logger.info("==========================================================")
-    logger.info("   ZINDI FINANCIAL STRESS PREDICTION - GRAND MASTER V3   ")
+    logger.info("   ZINDI FINANCIAL STRESS PREDICTION - GRAND MASTER V4   ")
     logger.info(f"   Mode: {'QUICK (10k sample)' if args.quick else 'FULL DATA (40,000 samples)'} | Folds: {n_splits}")
     logger.info("==========================================================")
 
@@ -63,7 +65,7 @@ def main():
         train_df = train_df.sample(n=10000, random_state=args.seed).reset_index(drop=True)
 
     # 2. Engineer Features
-    logger.info("Running Grand Master Feature Engineering Pipeline on Train and Test...")
+    logger.info("Running Grand Master v4 Feature Engineering Pipeline on Train and Test...")
     train_fe = engineer_features(train_df)
     test_fe = engineer_features(test_df)
 
@@ -79,13 +81,15 @@ def main():
         lgb_dart_params = {'n_estimators': 120, 'learning_rate': 0.05}
         xgb_params = {'n_estimators': 150, 'learning_rate': 0.05}
         hgb_params = {'max_iter': 100, 'learning_rate': 0.05}
+        et_params = {'n_estimators': 100}
         rf_params = {'n_estimators': 100}
         mlp_params = {'epochs': 10}
     else:
-        lgb_params = {'n_estimators': 1500, 'learning_rate': 0.018}
-        lgb_dart_params = {'n_estimators': 1200, 'learning_rate': 0.025}
-        xgb_params = {'n_estimators': 1200, 'learning_rate': 0.018}
-        hgb_params = {'max_iter': 900, 'learning_rate': 0.02}
+        lgb_params = {'n_estimators': 1800, 'learning_rate': 0.015}
+        lgb_dart_params = {'n_estimators': 1400, 'learning_rate': 0.022}
+        xgb_params = {'n_estimators': 1500, 'learning_rate': 0.015}
+        hgb_params = {'max_iter': 1000, 'learning_rate': 0.018}
+        et_params = {'n_estimators': 500}
         rf_params = {'n_estimators': 500}
         mlp_params = {'epochs': 25}
 
@@ -94,6 +98,7 @@ def main():
         'lightgbm_dart': lgb_dart_params,
         'xgboost': xgb_params,
         'hist_gbm': hgb_params,
+        'extra_trees': et_params,
         'random_forest': rf_params,
         'pytorch_mlp': mlp_params
     }
@@ -158,7 +163,7 @@ def main():
     logger.info("\n" + summary_df.to_string(index=False))
     logger.info("============================================================\n")
 
-    # 4. Multi-Model Ensembling & Blending
+    # 4. Multi-Model Ensembling, Blending & Calibration
     y_true = train_fe[TARGET_COL].values
     best_test_preds = None
 
@@ -170,6 +175,13 @@ def main():
         blend_oof, blend_test = compute_blend_predictions(oof_dict, test_dict, best_weights)
         blend_metrics = evaluate_predictions(y_true, blend_oof)
         logger.info(f"==> OPTIMAL PROBABILITY BLEND OOF | Log Loss: {blend_metrics['log_loss']:.5f} | ROC-AUC: {blend_metrics['roc_auc']:.5f} <==")
+
+        # Temperature Calibration on Blended Probabilities
+        opt_temp = calibrate_temperature(y_true, blend_oof)
+        calibrated_blend_oof = apply_temperature_scaling(blend_oof, opt_temp)
+        calibrated_blend_test = apply_temperature_scaling(blend_test, opt_temp)
+        calibrated_metrics = evaluate_predictions(y_true, calibrated_blend_oof)
+        logger.info(f"==> CALIBRATED BLEND (T={opt_temp:.3f})   | Log Loss: {calibrated_metrics['log_loss']:.5f} | ROC-AUC: {calibrated_metrics['roc_auc']:.5f} <==")
 
         # Logit Space Blend
         logit_oof, logit_test = compute_logit_blend(oof_dict, test_dict, best_weights)
@@ -185,20 +197,20 @@ def main():
         meta_oof, meta_test, meta_metrics = train_stacking_meta_learner(oof_dict, test_dict, y_true)
 
         # Select best calibrated strategy for primary submission
-        if logit_metrics['log_loss'] <= blend_metrics['log_loss']:
+        if calibrated_metrics['log_loss'] <= logit_metrics['log_loss']:
+            logger.info("Selected CALIBRATED TEMPERATURE BLEND for final primary submission.")
+            best_test_preds = calibrated_blend_test
+            final_oof_loss = calibrated_metrics['log_loss']
+            final_oof_auc = calibrated_metrics['roc_auc']
+            selected_strategy = "calibrated_blend"
+            strategy_metrics = calibrated_metrics
+        else:
             logger.info("Selected LOGIT-SPACE BLEND for final primary submission.")
             best_test_preds = logit_test
             final_oof_loss = logit_metrics['log_loss']
             final_oof_auc = logit_metrics['roc_auc']
             selected_strategy = "logit_blend"
             strategy_metrics = logit_metrics
-        else:
-            logger.info("Selected PROBABILITY BLEND for final primary submission.")
-            best_test_preds = blend_test
-            final_oof_loss = blend_metrics['log_loss']
-            final_oof_auc = blend_metrics['roc_auc']
-            selected_strategy = "weighted_blend"
-            strategy_metrics = blend_metrics
 
         # Persist ensemble config
         save_ensemble_config(
@@ -255,8 +267,8 @@ def main():
         "timestamp": run_ts,
         "git_commit": get_git_commit(),
         "model": "ensemble" if selected_strategy != "single_model" else list(test_dict.keys())[0],
-        "model_version": "v3_grandmaster",
-        "feature_version": "v3",
+        "model_version": "v4_grandmaster_calibrated",
+        "feature_version": "v4",
         "feature_count": len(train_fe.columns) - 1,
         "cv_folds": n_splits,
         "hyperparameters": {s['Model']: s['_params'] for s in model_summaries},
@@ -266,11 +278,11 @@ def main():
         "generalization_gap": None,
         "ensemble_information": {
             "strategy": selected_strategy,
-            "weights": weight_dict if selected_strategy in ["weighted_blend", "logit_blend"] else None
+            "weights": weight_dict if selected_strategy in ["weighted_blend", "logit_blend", "calibrated_blend"] else None
         },
         "training_time": None,
         "status": "completed",
-        "notes": f"Grand Master training run with {n_splits}-fold CV"
+        "notes": f"Grand Master v4 training run with {n_splits}-fold CV and Temperature Calibration"
     }
 
     experiment_record["_base_models"] = [

@@ -36,15 +36,16 @@ def compute_shannon_entropy(matrix):
 
 def engineer_features(data_df):
     """
-    Grand Master Feature Engineering Pipeline for Financial Stress Prediction.
-    Extracts ~370+ domain, temporal, volatility, peer-relative, and behavioral signals.
+    Grand Master v4 Feature Engineering Pipeline (~450+ high-signal features).
+    Extracts deep domain, multi-lag velocity, rolling statistics, group z-scores,
+    activity bitmasks, and liquidity strain signals.
     """
-    logger.info("Starting Grand Master feature engineering pipeline...")
+    logger.info("Starting Grand Master v4 feature engineering pipeline...")
     df = data_df.copy()
     new_cols = {}
     
     # -------------------------------------------------------------
-    # 1. Profile, Interactions & Peer-Relative Ratios
+    # 1. Profile, Interactions & Group Peer Benchmarks
     # -------------------------------------------------------------
     logger.info("Computing profile, cross-interactions & peer benchmarks...")
     new_cols['arpu_per_age'] = df['arpu'] / (df['age'] + 1.0)
@@ -83,22 +84,27 @@ def engineer_features(data_df):
         freq = cat_df[c].value_counts(normalize=True).to_dict()
         new_cols[f'{c}_freq'] = cat_df[c].map(freq).astype(np.float32)
 
-    # Peer relative group benchmarks & percentiles
-    for group_col in ['segment', 'region', 'earning_pattern']:
-        grp_arpu = df.groupby(group_col)['arpu'].transform('mean')
-        grp_act = df.groupby(group_col)['x_90_d_activity_rate'].transform('mean')
-        grp_m1_bal = df.groupby(group_col)['m1_daily_avg_bal'].transform('mean')
+    # Peer relative group benchmarks & Z-scores
+    for group_col in ['segment', 'region', 'earning_pattern', 'segment_earning']:
+        col_to_group = cat_df[group_col] if group_col in cat_df else df[group_col]
+        grp_arpu_mean = df.groupby(col_to_group)['arpu'].transform('mean')
+        grp_arpu_std = df.groupby(col_to_group)['arpu'].transform('std').fillna(1.0)
+        grp_act = df.groupby(col_to_group)['x_90_d_activity_rate'].transform('mean')
+        grp_m1_bal_mean = df.groupby(col_to_group)['m1_daily_avg_bal'].transform('mean')
+        grp_m1_bal_std = df.groupby(col_to_group)['m1_daily_avg_bal'].transform('std').fillna(1.0)
         
-        new_cols[f'arpu_vs_{group_col}_mean'] = df['arpu'] / (grp_arpu + 1.0)
+        new_cols[f'arpu_vs_{group_col}_mean'] = df['arpu'] / (grp_arpu_mean + 1.0)
+        new_cols[f'arpu_{group_col}_zscore'] = (df['arpu'] - grp_arpu_mean) / (grp_arpu_std + 1e-4)
         new_cols[f'activity_vs_{group_col}_mean'] = df['x_90_d_activity_rate'] / (grp_act + 1e-4)
-        new_cols[f'm1_bal_vs_{group_col}_mean'] = df['m1_daily_avg_bal'] / (grp_m1_bal + 1.0)
-        new_cols[f'm1_bal_pct_in_{group_col}'] = df.groupby(group_col)['m1_daily_avg_bal'].rank(pct=True).astype(np.float32)
+        new_cols[f'm1_bal_vs_{group_col}_mean'] = df['m1_daily_avg_bal'] / (grp_m1_bal_mean + 1.0)
+        new_cols[f'm1_bal_{group_col}_zscore'] = (df['m1_daily_avg_bal'] - grp_m1_bal_mean) / (grp_m1_bal_std + 1e-4)
+        new_cols[f'm1_bal_pct_in_{group_col}'] = df.groupby(col_to_group)['m1_daily_avg_bal'].rank(pct=True).astype(np.float32)
 
     # -------------------------------------------------------------
-    # 2. Balance Trajectory, Volatility & Stress Position
+    # 2. Balance Trajectory, Multi-Month Lags, Volatility & Strain
     # -------------------------------------------------------------
-    logger.info("Computing balance trends, acceleration & drawdown metrics...")
-    # Matrix ordered M6 (oldest, col 0) to M1 (most recent, col 5)
+    logger.info("Computing balance multi-lags, rolling stats & drawdowns...")
+    # Matrix ordered M6 (col 0) to M1 (col 5)
     bal_matrix = df[BALANCE_COLS[::-1]].values.astype(np.float32)
     
     new_cols['bal_slope'] = compute_linear_slope(bal_matrix)
@@ -108,6 +114,19 @@ def engineer_features(data_df):
     new_cols['bal_max'] = np.max(bal_matrix, axis=1)
     new_cols['bal_cv'] = new_cols['bal_std'] / (new_cols['bal_mean'] + 1.0)
     
+    # Balance Multi-Month Lags and Differences (M1-M2, M2-M3, M3-M4, M4-M5, M5-M6)
+    for i in range(1, 6):
+        curr_b = df[f'm{i}_daily_avg_bal']
+        prev_b = df[f'm{i+1}_daily_avg_bal']
+        new_cols[f'bal_diff_m{i}_m{i+1}'] = curr_b - prev_b
+        new_cols[f'bal_pct_chg_m{i}_m{i+1}'] = (curr_b - prev_b) / (prev_b + 1.0)
+
+    # Rolling window stats on balance
+    new_cols['bal_mean_m1_m2'] = df[['m1_daily_avg_bal', 'm2_daily_avg_bal']].mean(axis=1)
+    new_cols['bal_mean_m1_m3'] = df[['m1_daily_avg_bal', 'm2_daily_avg_bal', 'm3_daily_avg_bal']].mean(axis=1)
+    new_cols['bal_mean_m4_m6'] = df[['m4_daily_avg_bal', 'm5_daily_avg_bal', 'm6_daily_avg_bal']].mean(axis=1)
+    new_cols['bal_recent_vs_old_ratio'] = new_cols['bal_mean_m1_m3'] / (new_cols['bal_mean_m4_m6'] + 1.0)
+    
     # Log transforms of balance
     new_cols['log_m1_bal'] = np.log1p(np.maximum(0, df['m1_daily_avg_bal'].values))
     new_cols['log_bal_mean'] = np.log1p(np.maximum(0, new_cols['bal_mean']))
@@ -115,37 +134,25 @@ def engineer_features(data_df):
     # Ratios and Differences
     new_cols['bal_m1_vs_m6_ratio'] = df['m1_daily_avg_bal'] / (df['m6_daily_avg_bal'] + 1.0)
     new_cols['bal_m1_vs_m6_diff'] = df['m1_daily_avg_bal'] - df['m6_daily_avg_bal']
-    new_cols['bal_m1_vs_m2_diff'] = df['m1_daily_avg_bal'] - df['m2_daily_avg_bal']
-    new_cols['bal_m1_vs_m2_ratio'] = df['m1_daily_avg_bal'] / (df['m2_daily_avg_bal'] + 1.0)
+    new_cols['bal_recent_vs_hist_ratio'] = (df['m1_daily_avg_bal'] + df['m2_daily_avg_bal']) / (2.0 * (new_cols['bal_mean_m4_m6'] + 1.0))
     
-    hist_bal_avg = df[['m3_daily_avg_bal', 'm4_daily_avg_bal', 'm5_daily_avg_bal', 'm6_daily_avg_bal']].mean(axis=1)
-    new_cols['bal_recent_vs_hist_ratio'] = (df['m1_daily_avg_bal'] + df['m2_daily_avg_bal']) / (2.0 * (hist_bal_avg + 1.0))
-    
-    # Acceleration / 2nd derivative: is balance deterioration speeding up?
-    new_cols['bal_acceleration'] = (df['m1_daily_avg_bal'] - df['m2_daily_avg_bal']) - (df['m2_daily_avg_bal'] - df['m3_daily_avg_bal'])
+    # Acceleration / 2nd derivative: (M1 - M2) - (M2 - M3)
+    new_cols['bal_acceleration'] = new_cols['bal_diff_m1_m2'] - new_cols['bal_diff_m2_m3']
     
     # Proximity to 6-month historical minimum balance (Rock-Bottom score)
     bal_range = new_cols['bal_max'] - new_cols['bal_min'] + 1e-4
     new_cols['bal_rock_bottom_idx'] = (df['m1_daily_avg_bal'] - new_cols['bal_min']) / bal_range
     new_cols['bal_is_all_time_low'] = (df['m1_daily_avg_bal'] <= (new_cols['bal_min'] + 1.0)).astype(np.float32)
-    
-    # Balance range dispersion
     new_cols['bal_range_dispersion'] = (new_cols['bal_max'] - new_cols['bal_min']) / (new_cols['bal_mean'] + 1.0)
     
     # Consecutive month-over-month balance drops count (0 to 5)
-    bal_drops = (
-        (df['m1_daily_avg_bal'] < df['m2_daily_avg_bal']).astype(int) +
-        (df['m2_daily_avg_bal'] < df['m3_daily_avg_bal']).astype(int) +
-        (df['m3_daily_avg_bal'] < df['m4_daily_avg_bal']).astype(int) +
-        (df['m4_daily_avg_bal'] < df['m5_daily_avg_bal']).astype(int) +
-        (df['m5_daily_avg_bal'] < df['m6_daily_avg_bal']).astype(int)
-    )
+    bal_drops = sum((df[f'm{i}_daily_avg_bal'] < df[f'm{i+1}_daily_avg_bal']).astype(int) for i in range(1, 6))
     new_cols['consecutive_bal_drops_count'] = bal_drops
 
     # -------------------------------------------------------------
-    # 3. Monthly Inflows, Outflows, Net Cashflows & Deficit Counts
+    # 3. Monthly Inflows, Outflows, Imbalance & Liquidity Strain
     # -------------------------------------------------------------
-    logger.info("Computing inflow/outflow dynamics, coverage & deficit counts...")
+    logger.info("Computing monthly inflows, outflows, strain ratios & cashflow dynamics...")
     m_inflows = []
     m_outflows = []
     m_nets = []
@@ -173,12 +180,19 @@ def engineer_features(data_df):
         new_cols[f'{m_str}_net_cashflow'] = net
         m_nets.append(net)
         
-        # Deficit flag (outflows exceeded inflows)
+        # Deficit and Strain Ratios
         m_deficit_flags.append((net < 0).astype(int))
         new_cols[f'{m_str}_coverage_ratio'] = inflow / (outflow + 1.0)
         new_cols[f'{m_str}_outflow_to_bal'] = outflow / (df[f'{m_str}_daily_avg_bal'] + 1.0)
+        new_cols[f'{m_str}_inflow_outflow_imbalance'] = (inflow - outflow) / (inflow + outflow + 1.0)
 
-    # 6-Month Deficit Month Count (how many months ran negative cashflow?)
+    # Multi-month inflow/outflow velocity differences
+    for i in range(1, 6):
+        new_cols[f'inflow_diff_m{i}_m{i+1}'] = m_inflows[i-1] - m_inflows[i]
+        new_cols[f'outflow_diff_m{i}_m{i+1}'] = m_outflows[i-1] - m_outflows[i]
+        new_cols[f'net_cashflow_diff_m{i}_m{i+1}'] = m_nets[i-1] - m_nets[i]
+
+    # 6-Month Deficit Month Count
     new_cols['total_deficit_months_6m'] = np.sum(m_deficit_flags, axis=0)
 
     inflow_matrix = np.column_stack([m_inflows[5-i] for i in range(6)]).astype(np.float32)
@@ -224,9 +238,9 @@ def engineer_features(data_df):
     new_cols['outflow_entropy_change'] = new_cols['m1_outflow_entropy'] - new_cols['m6_outflow_entropy']
 
     # -------------------------------------------------------------
-    # 5. Transaction-Level Slopes, Ratios & Emergency Spikes
+    # 5. Transaction-Level Slopes, Ratios & Multi-Lag Velocity
     # -------------------------------------------------------------
-    logger.info("Computing transaction-level recency, slopes & emergency spikes...")
+    logger.info("Computing transaction-level multi-lags, recency & emergency spikes...")
     drop_to_zero_flags = []
     
     for t in TRANSACTION_TYPES:
@@ -235,6 +249,11 @@ def engineer_features(data_df):
         
         new_cols[f'{t}_total_val_6m'] = df[val_cols].sum(axis=1)
         new_cols[f'{t}_total_vol_6m'] = df[vol_cols].sum(axis=1)
+        
+        # Multi-month lags for each transaction type
+        new_cols[f'{t}_val_diff_m1_m2'] = df[f'm1_{t}_total_value'] - df[f'm2_{t}_total_value']
+        new_cols[f'{t}_vol_diff_m1_m2'] = df[f'm1_{t}_volume'] - df[f'm2_{t}_volume']
+        new_cols[f'{t}_val_diff_m2_m3'] = df[f'm2_{t}_total_value'] - df[f'm3_{t}_total_value']
         
         new_cols[f'{t}_val_m1_vs_m6_ratio'] = df[f'm1_{t}_total_value'] / (df[f'm6_{t}_total_value'] + 1.0)
         new_cols[f'{t}_vol_m1_vs_m6_ratio'] = df[f'm1_{t}_volume'] / (df[f'm6_{t}_volume'] + 1.0)
@@ -262,26 +281,36 @@ def engineer_features(data_df):
     new_cols['emergency_cash_drawdown'] = (df['m1_withdraw_total_value'] + df['m1_transfer_from_bank_total_value']) / (df['m1_daily_avg_bal'] + 1.0)
 
     # -------------------------------------------------------------
-    # 6. Counterparty Diversity & Intensity
+    # 6. Counterparty Multi-Month Dynamics
     # -------------------------------------------------------------
-    logger.info("Computing counterparty intensity features...")
+    logger.info("Computing counterparty multi-month dynamics...")
     for t, c_suffix in COUNTERPARTY_SUFFIX_MAP.items():
         m1_cp = f"m1_{t}_{c_suffix}"
+        m2_cp = f"m2_{t}_{c_suffix}"
+        m6_cp = f"m6_{t}_{c_suffix}"
         m1_vol = f"m1_{t}_volume"
+        
         if m1_cp in df.columns and m1_vol in df.columns:
             new_cols[f'{t}_cp_per_vol_m1'] = df[m1_cp] / (df[m1_vol] + 1.0)
-            
-        m6_cp = f"m6_{t}_{c_suffix}"
+        if m1_cp in df.columns and m2_cp in df.columns:
+            new_cols[f'{t}_cp_diff_m1_m2'] = df[m1_cp] - df[m2_cp]
         if m1_cp in df.columns and m6_cp in df.columns:
             new_cols[f'{t}_cp_m1_vs_m6_ratio'] = df[m1_cp] / (df[m6_cp] + 1.0)
 
     # -------------------------------------------------------------
-    # 7. Activity & Composite Stress Signal
+    # 7. Activity Bitmasks & Composite Stress Signal
     # -------------------------------------------------------------
-    logger.info("Computing overall activity summary & stress indexes...")
+    logger.info("Computing activity bitmasks & composite stress indexes...")
     new_cols['total_zero_activity_m1'] = np.sum(drop_to_zero_flags, axis=0)
     
-    # Composite Heuristic Stress Index (combining acute warning signals)
+    # 6-Month Active Sequence Bitmask (Bit i is 1 if total volume in M_i > 0)
+    bitmask = np.zeros(len(df), dtype=np.int32)
+    for i in range(1, 7):
+        has_vol = (new_cols[f'm{i}_total_vol'] > 0).astype(np.int32)
+        bitmask += has_vol * (2 ** (6 - i))
+    new_cols['activity_6m_bitmask'] = bitmask
+    
+    # Composite Heuristic Stress Index
     stress_idx = (
         (-new_cols['bal_slope'] * 0.25) +
         (new_cols['total_deficit_months_6m'] * 0.3) +
@@ -298,5 +327,5 @@ def engineer_features(data_df):
     num_cols = df.select_dtypes(include=[np.number]).columns
     df[num_cols] = df[num_cols].replace([np.inf, -np.inf], np.nan).fillna(0.0)
     
-    logger.info(f"Grand Master Feature engineering completed! Total columns: {df.shape[1]}")
+    logger.info(f"Grand Master v4 Feature engineering completed! Total columns: {df.shape[1]}")
     return df

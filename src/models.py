@@ -17,7 +17,6 @@ def is_gpu_available():
     """Check if NVIDIA CUDA GPU is available for acceleration."""
     try:
         import xgboost as xgb
-        # Quick test on 2 samples
         test_model = xgb.XGBClassifier(device='cuda', tree_method='hist', n_estimators=1)
         test_model.fit(np.zeros((2, 2)), np.array([0, 1]))
         return True
@@ -53,7 +52,7 @@ except ImportError:
 # High-Performance PyTorch Tabular Neural Network with Residual connections
 if TORCH_AVAILABLE:
     class TabularResMLP(nn.Module):
-        def __init__(self, input_dim, hidden_dim=128, dropout=0.2):
+        def __init__(self, input_dim, hidden_dim=160, dropout=0.2):
             super().__init__()
             self.input_layer = nn.Sequential(
                 nn.Linear(input_dim, hidden_dim),
@@ -94,47 +93,38 @@ if TORCH_AVAILABLE:
 
 def get_model(model_name, params=None):
     """
-    Factory function to instantiate models with Grand Master hyperparameters.
-    Dynamically routes compute to GPU if present, else multi-threaded CPU.
+    Factory function to instantiate models with Grand Master v4 hyperparameters.
     """
     p = params or {}
     
     if model_name.lower() == "lightgbm":
         default_params = {
-            'n_estimators': 1500,
-            'learning_rate': 0.018,
-            'num_leaves': 41,
-            'max_depth': 7,
-            'subsample': 0.85,
-            'colsample_bytree': 0.65,
-            'min_child_samples': 30,
-            'reg_alpha': 0.3,
-            'reg_lambda': 2.0,
+            'n_estimators': 1800,
+            'learning_rate': 0.015,
+            'num_leaves': 55,
+            'max_depth': 8,
+            'subsample': 0.8,
+            'colsample_bytree': 0.6,
+            'min_child_samples': 25,
+            'reg_alpha': 0.4,
+            'reg_lambda': 3.0,
             'scale_pos_weight': 1.0,
             'random_state': SEED,
             'n_jobs': -1,
             'verbose': -1
         }
-        if GPU_AVAILABLE:
-            try:
-                # Test if OpenCL/CUDA lightgbm is enabled
-                test_lgb = LGBMClassifier(device='gpu', n_estimators=1, verbose=-1)
-                test_lgb.fit(np.zeros((2, 2)), np.array([0, 1]))
-                default_params['device'] = 'gpu'
-            except Exception:
-                default_params['device'] = 'cpu'
         default_params.update(p)
         return LGBMClassifier(**default_params)
 
     elif model_name.lower() == "lightgbm_dart":
         default_params = {
             'boosting_type': 'dart',
-            'n_estimators': 1200,
-            'learning_rate': 0.025,
-            'num_leaves': 35,
-            'max_depth': 6,
-            'subsample': 0.85,
-            'colsample_bytree': 0.65,
+            'n_estimators': 1400,
+            'learning_rate': 0.022,
+            'num_leaves': 45,
+            'max_depth': 7,
+            'subsample': 0.8,
+            'colsample_bytree': 0.6,
             'drop_rate': 0.1,
             'skip_drop': 0.5,
             'scale_pos_weight': 1.0,
@@ -142,49 +132,55 @@ def get_model(model_name, params=None):
             'n_jobs': -1,
             'verbose': -1
         }
-        if GPU_AVAILABLE:
-            try:
-                test_lgb = LGBMClassifier(device='gpu', n_estimators=1, verbose=-1)
-                test_lgb.fit(np.zeros((2, 2)), np.array([0, 1]))
-                default_params['device'] = 'gpu'
-            except Exception:
-                default_params['device'] = 'cpu'
         default_params.update(p)
         return LGBMClassifier(**default_params)
         
     elif model_name.lower() == "xgboost":
         default_params = {
-            'n_estimators': 1200,
-            'learning_rate': 0.018,
+            'n_estimators': 1500,
+            'learning_rate': 0.015,
             'max_depth': 6,
-            'subsample': 0.85,
-            'colsample_bytree': 0.65,
+            'subsample': 0.8,
+            'colsample_bytree': 0.6,
             'min_child_weight': 5,
-            'reg_alpha': 0.3,
-            'reg_lambda': 3.0,
+            'reg_alpha': 0.4,
+            'reg_lambda': 4.0,
             'scale_pos_weight': 1.0,
             'random_state': SEED,
             'n_jobs': -1,
             'eval_metric': 'logloss',
             'tree_method': 'hist',
-            'device': 'cuda' if GPU_AVAILABLE else 'cpu'  # GPU Acceleration
+            'device': 'cuda' if GPU_AVAILABLE else 'cpu'
         }
         default_params.update(p)
         return XGBClassifier(**default_params)
 
     elif model_name.lower() == "hist_gbm":
         default_params = {
-            'max_iter': 900,
-            'learning_rate': 0.02,
-            'max_leaf_nodes': 35,
-            'max_depth': 7,
-            'min_samples_leaf': 30,
-            'l2_regularization': 2.0,
+            'max_iter': 1000,
+            'learning_rate': 0.018,
+            'max_leaf_nodes': 45,
+            'max_depth': 8,
+            'min_samples_leaf': 25,
+            'l2_regularization': 3.0,
             'random_state': SEED
         }
         default_params.update(p)
         return HistGradientBoostingClassifier(**default_params)
         
+    elif model_name.lower() == "extra_trees":
+        default_params = {
+            'n_estimators': 500,
+            'max_depth': 18,
+            'min_samples_split': 6,
+            'min_samples_leaf': 2,
+            'max_features': 0.25,
+            'random_state': SEED,
+            'n_jobs': -1
+        }
+        default_params.update(p)
+        return ExtraTreesClassifier(**default_params)
+
     elif model_name.lower() == "random_forest":
         default_params = {
             'n_estimators': 500,
@@ -197,19 +193,6 @@ def get_model(model_name, params=None):
         }
         default_params.update(p)
         return RandomForestClassifier(**default_params)
-        
-    elif model_name.lower() == "extra_trees":
-        default_params = {
-            'n_estimators': 500,
-            'max_depth': 16,
-            'min_samples_split': 8,
-            'min_samples_leaf': 3,
-            'max_features': 0.25,
-            'random_state': SEED,
-            'n_jobs': -1
-        }
-        default_params.update(p)
-        return ExtraTreesClassifier(**default_params)
         
     elif model_name.lower() == "logistic_regression":
         default_params = {
@@ -237,7 +220,7 @@ class PyTorchMLPWrapper:
         self.epochs = self.params.get('epochs', 25)
         self.lr = self.params.get('lr', 1e-3)
         self.batch_size = self.params.get('batch_size', 256)
-        self.hidden_dim = self.params.get('hidden_dim', 128)
+        self.hidden_dim = self.params.get('hidden_dim', 160)
         self.dropout = self.params.get('dropout', 0.2)
         self.device = TORCH_DEVICE
         self.scaler = StandardScaler()

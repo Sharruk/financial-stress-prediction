@@ -4,13 +4,39 @@ from scipy.optimize import minimize
 from scipy.stats import rankdata
 from scipy.special import expit, logit
 from sklearn.linear_model import LogisticRegression, RidgeClassifier
+from sklearn.calibration import CalibratedClassifierCV
 from src.utils import evaluate_predictions, get_logger
 
 logger = get_logger()
 
+def calibrate_temperature(y_true, oof_probs, initial_temp=1.05):
+    """
+    Find optimal temperature parameter T minimizing Log Loss on OOF predictions.
+    P_calibrated = Sigmoid(logit(P) / T)
+    Prevents overconfident penalty on multi-metric leaderboards.
+    """
+    eps = 1e-6
+    raw_logits = logit(np.clip(oof_probs, eps, 1.0 - eps))
+    
+    def temp_loss(T):
+        scaled_probs = expit(raw_logits / T[0])
+        metrics = evaluate_predictions(y_true, scaled_probs)
+        return metrics['log_loss']
+        
+    res = minimize(temp_loss, [initial_temp], method='Nelder-Mead', bounds=[(0.5, 2.0)])
+    best_temp = float(res.x[0])
+    logger.info(f"Optimal Temperature Parameter T: {best_temp:.4f}")
+    return best_temp
+
+def apply_temperature_scaling(probs, temp):
+    """Apply temperature scaling to probability vector."""
+    eps = 1e-6
+    raw_logits = logit(np.clip(probs, eps, 1.0 - eps))
+    return expit(raw_logits / temp)
+
 def optimize_ensemble_weights(oof_dict, y_true):
     """
-    Find optimal probability weights minimizing OOF Log Loss using SLSQP optimization.
+    Find optimal probability weights minimizing OOF Multi Score using SLSQP optimization.
     """
     model_names = list(oof_dict.keys())
     oof_matrix = np.column_stack([oof_dict[m] for m in model_names])
@@ -20,8 +46,8 @@ def optimize_ensemble_weights(oof_dict, y_true):
         weights = weights / (np.sum(weights) + 1e-9)
         blend_oof = np.dot(oof_matrix, weights)
         metrics = evaluate_predictions(y_true, blend_oof)
-        # Target both log loss and high ROC-AUC
-        return metrics['log_loss'] - 0.05 * metrics['roc_auc']
+        # Zindi Multi Score objective: lower log loss + higher ROC-AUC
+        return metrics['log_loss'] - 0.10 * metrics['roc_auc']
         
     initial_weights = np.ones(n_models) / n_models
     bounds = [(0.0, 1.0) for _ in range(n_models)]
