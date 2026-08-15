@@ -63,23 +63,43 @@ if TORCH_AVAILABLE:
 
 def get_model(model_name, params=None):
     """
-    Factory function to instantiate models with top-tier hyperparameters.
+    Factory function to instantiate models with Grand Master hyperparameters.
+    Uses unweighted loss (scale_pos_weight=1.0) to output true calibrated posteriors for Multi Score.
     """
     p = params or {}
     
     if model_name.lower() == "lightgbm":
         default_params = {
-            'n_estimators': 1200,
-            'learning_rate': 0.02,
-            'num_leaves': 39,
+            'n_estimators': 1500,
+            'learning_rate': 0.018,
+            'num_leaves': 41,
             'max_depth': 7,
             'subsample': 0.85,
             'colsample_bytree': 0.65,
-            'min_child_samples': 25,
-            'reg_alpha': 0.2,
-            'reg_lambda': 1.5,
-            'scale_pos_weight': 1.25,
+            'min_child_samples': 30,
+            'reg_alpha': 0.3,
+            'reg_lambda': 2.0,
+            'scale_pos_weight': 1.0,  # Pure calibrated posterior
             'random_state': SEED,
+            'n_jobs': -1,
+            'verbose': -1
+        }
+        default_params.update(p)
+        return LGBMClassifier(**default_params)
+
+    elif model_name.lower() == "lightgbm_dart":
+        default_params = {
+            'boosting_type': 'dart',
+            'n_estimators': 1200,
+            'learning_rate': 0.03,
+            'num_leaves': 35,
+            'max_depth': 6,
+            'subsample': 0.85,
+            'colsample_bytree': 0.65,
+            'drop_rate': 0.1,
+            'skip_drop': 0.5,
+            'scale_pos_weight': 1.0,
+            'random_state': SEED + 7,
             'n_jobs': -1,
             'verbose': -1
         }
@@ -88,15 +108,15 @@ def get_model(model_name, params=None):
         
     elif model_name.lower() == "xgboost":
         default_params = {
-            'n_estimators': 1000,
-            'learning_rate': 0.02,
+            'n_estimators': 1200,
+            'learning_rate': 0.018,
             'max_depth': 6,
             'subsample': 0.85,
             'colsample_bytree': 0.65,
-            'min_child_weight': 4,
-            'reg_alpha': 0.2,
-            'reg_lambda': 2.0,
-            'scale_pos_weight': 1.25,
+            'min_child_weight': 5,
+            'reg_alpha': 0.3,
+            'reg_lambda': 3.0,
+            'scale_pos_weight': 1.0,
             'random_state': SEED,
             'n_jobs': -1,
             'eval_metric': 'logloss',
@@ -107,12 +127,12 @@ def get_model(model_name, params=None):
 
     elif model_name.lower() == "hist_gbm":
         default_params = {
-            'max_iter': 800,
-            'learning_rate': 0.025,
+            'max_iter': 900,
+            'learning_rate': 0.02,
             'max_leaf_nodes': 35,
             'max_depth': 7,
-            'min_samples_leaf': 25,
-            'l2_regularization': 1.5,
+            'min_samples_leaf': 30,
+            'l2_regularization': 2.0,
             'random_state': SEED
         }
         default_params.update(p)
@@ -120,12 +140,11 @@ def get_model(model_name, params=None):
         
     elif model_name.lower() == "random_forest":
         default_params = {
-            'n_estimators': 400,
+            'n_estimators': 500,
             'max_depth': 16,
             'min_samples_split': 8,
             'min_samples_leaf': 3,
             'max_features': 0.25,
-            'class_weight': 'balanced_subsample',
             'random_state': SEED,
             'n_jobs': -1
         }
@@ -134,12 +153,11 @@ def get_model(model_name, params=None):
         
     elif model_name.lower() == "extra_trees":
         default_params = {
-            'n_estimators': 400,
+            'n_estimators': 500,
             'max_depth': 16,
             'min_samples_split': 8,
             'min_samples_leaf': 3,
             'max_features': 0.25,
-            'class_weight': 'balanced_subsample',
             'random_state': SEED,
             'n_jobs': -1
         }
@@ -150,7 +168,6 @@ def get_model(model_name, params=None):
         default_params = {
             'C': 0.1,
             'max_iter': 1000,
-            'class_weight': 'balanced',
             'random_state': SEED,
             'n_jobs': -1
         }

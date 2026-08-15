@@ -21,7 +21,7 @@ DATA_DICTIONARY_PATH = RAW_DATA_DIR / "data_dictionary.csv"
 
 # Modeling Constants
 SEED = 42
-N_SPLITS = 5
+N_SPLITS = 10  # 10-Fold Stratified Cross-Validation for Grand Master stability
 ID_COL = "ID"
 TARGET_COL = "liquidity_stress_next_30d"
 
@@ -51,6 +51,9 @@ TRANSACTION_TYPES = [
     "deposit",
     "withdraw"
 ]
+
+INFLOW_TYPES = ["deposit", "received", "transfer_from_bank"]
+OUTFLOW_TYPES = ["withdraw", "paybill", "merchantpay", "mm_send"]
 
 COUNTERPARTY_SUFFIX_MAP = {
     "paybill": "companies",

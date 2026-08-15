@@ -1,5 +1,5 @@
 ================================================================================
-   ZINDI FINANCIAL STRESS PREDICTION CHALLENGE - MASTER LEARNING & VIVA GUIDE
+   ZINDI FINANCIAL STRESS PREDICTION CHALLENGE - MASTER LEARNING & VIVA GUIDE (V3)
 ================================================================================
 
 PROJECT: Mobile-Money Liquidity Stress Prediction Challenge
@@ -7,23 +7,24 @@ PLATFORM: Zindi Competition Track
 TEAM: Sharruk S, Shalini M, Nathaniel Christian
 GOAL: Predict the probability of a customer experiencing liquidity/financial stress
       within the next 30 days based on their profile and 6-month transaction history.
+TARGET BENCHMARK: Rank 1 on Zindi Multi Score (> 0.7394)
 
 ================================================================================
 TABLE OF CONTENTS (CHRONOLOGICAL STEP-BY-STEP LEARNING JOURNEY)
 ================================================================================
-STEP 1: Understanding the Business & ML Problem
-STEP 2: Dataset Anatomy & Exploration (EDA)
-STEP 3: The 85/15 Imbalance & Why Accuracy Fails
-STEP 4: Designing a Zero-Leakage 5-Fold Stratified Validation Harness
-STEP 5: Domain Feature Engineering (Transforming 184 Raw Cols to 340+ Signals)
-STEP 6: Model Architecture Selection (GBDT vs Random Forest vs Neural Nets)
-STEP 7: Multi-Model Ensembling, Blending & Rank Optimization
-STEP 8: Leaderboard Iterations & Score Interpretation (Log Loss vs ROC-AUC)
-STEP 9: How to Run the Complete Pipeline (CLI Commands)
+STEP 1: Understanding the Business & ML Problem Formulation
+STEP 2: Dataset Anatomy & Feature Exploration (EDA)
+STEP 3: The 85/15 Imbalance Problem & Why Accuracy Fails
+STEP 4: Designing a Zero-Leakage 10-Fold Stratified Validation Harness
+STEP 5: Grand Master Domain Feature Engineering (367 Total Features)
+STEP 6: High-Capacity Model Suite (LightGBM GBDT & DART, XGBoost, HistGBM, RF, ResMLP)
+STEP 7: Multi-Model Ensembling, Probability Calibration & Logit Blending
+STEP 8: Leaderboard Metrics & Score Interpretation (Multi Score, Log Loss, ROC-AUC)
+STEP 9: Execution Guide (How to Run Full 40,000-Sample Training)
 STEP 10: Master Viva / Professor Defense Q&A
 
 ================================================================================
-STEP 1: UNDERSTANDING THE BUSINESS & ML PROBLEM
+STEP 1: UNDERSTANDING THE BUSINESS & ML PROBLEM FORMULATION
 ================================================================================
 1. What is Liquidity Stress?
    - A customer is in "liquidity stress" when they lack sufficient immediately
@@ -43,11 +44,11 @@ STEP 1: UNDERSTANDING THE BUSINESS & ML PROBLEM
    - Output: Continuous risk probability [0.0 to 1.0].
 
 ================================================================================
-STEP 2: DATASET ANATOMY & EXPLORATION (EDA)
+STEP 2: DATASET ANATOMY & FEATURE EXPLORATION (EDA)
 ================================================================================
 - Training Set (Train.csv): 40,000 rows x 184 columns.
 - Test Set (Test.csv): 30,000 rows x 183 columns (unlabeled).
-- Submission Target: Predict probability for all 30,000 test IDs.
+- Submission Target: Predict calibrated probability for all 30,000 test IDs.
 
 - Breakdown of the 184 Raw Columns:
   1. Identifier (1 col): `ID` (Hexadecimal ID -> dropped from model input).
@@ -81,7 +82,7 @@ STEP 2: DATASET ANATOMY & EXPLORATION (EDA)
   6. Target Label (1 col): `liquidity_stress_next_30d` (Train only).
 
 ================================================================================
-STEP 3: THE 85/15 IMBALANCE & WHY ACCURACY FAILS
+STEP 3: THE 85/15 IMBALANCE PROBLEM & WHY ACCURACY FAILS
 ================================================================================
 1. The Observed Target Distribution:
    - Class 0 (No Stress): 34,000 customers (85.0%)
@@ -91,61 +92,53 @@ STEP 3: THE 85/15 IMBALANCE & WHY ACCURACY FAILS
    - If a naive model predicts "0" for 100% of customers, it achieves 85% Accuracy!
    - However, it detects exactly 0% of stressed customers, making it useless for business.
 
-3. The Proper Metrics:
-   - Log Loss (Binary Cross-Entropy): Evaluates calibrated probability certainty.
-     Penalizes confident wrong guesses heavily.
-   - ROC-AUC: Measures how accurately the model ranks stressed customers above
-     non-stressed customers across all possible decision thresholds.
+3. The Proper Evaluation Formulation:
+   - Evaluated using Log Loss (cross-entropy certainty) and ROC-AUC (ranking power).
+   - Unweighted posterior probability outputs ensure that predicted probabilities match
+     the true 15% class base rate ($E[P(Y=1)] \approx 0.15$), optimizing the combined Multi Score.
 
 ================================================================================
-STEP 4: DESIGNING A ZERO-LEAKAGE 5-FOLD STRATIFIED VALIDATION HARNESS
+STEP 4: DESIGNING A ZERO-LEAKAGE 10-FOLD STRATIFIED VALIDATION HARNESS
 ================================================================================
-1. Why Stratified K-Fold?
-   - Regular K-Fold could randomly allocate too few positive stress cases into a fold.
-   - Stratified K-Fold guarantees that every single fold has the exact 85/15 ratio.
+1. Why 10-Fold Stratified Cross-Validation?
+   - 10 folds provide 36,000 training rows per fold (90% of dataset), maximizing data utilization.
+   - Ensembling 10 models per architecture reduces variance by $\sqrt{10} \approx 3.16\times$.
+   - Preserves the exact 85/15 class ratio across all 10 folds.
 
 2. Preventing Data Leakage (Strict Fold Isolation):
-   - What is Data Leakage? Using information from validation or test data during training.
-   - How We Solved It:
-     * Target Encoding and scaling are fit ONLY on the 80% training slice of each fold.
-     * The fitted mappings are then applied to the 20% validation slice and test data.
-     * No global target statistics ever leak across validation boundaries.
-
-3. Out-Of-Fold (OOF) Evaluation:
-   - OOF predictions produce an honest, unbiased assessment of leaderboard performance.
+   - Target Encoding and feature scalers are fit strictly on the 90% training fold slice.
+   - Validation slices and test data only use pre-fitted mappings.
+   - Zero global target statistics leak across validation boundaries.
 
 ================================================================================
-STEP 5: DOMAIN FEATURE ENGINEERING (EXPANDED TO 340+ FEATURES)
+STEP 5: GRAND MASTER DOMAIN FEATURE ENGINEERING (367 TOTAL FEATURES)
 ================================================================================
 Raw monthly numbers are static. To detect stress, we engineered dynamic temporal patterns:
 
 A. Linear Temporal Slopes (M6 -> M1):
    - Least-squares regression slope over 6 months ($M6 \rightarrow M1$).
-   - A negative `bal_slope` directly captures declining reserves.
-   - Slopes computed for net cash flow, inflows, outflows, and individual transaction volumes.
+   - Negative `bal_slope` directly captures declining reserves.
+   - Slopes computed for net cash flow, inflows, outflows, and volumes.
 
-B. Net Cash Flow & Liquidity Coverage:
-   - Monthly Inflow = `deposit` + `received` + `transfer_from_bank`.
-   - Monthly Outflow = `withdraw` + `paybill` + `merchantpay` + `mm_send`.
-   - Net Cash Flow = Inflow - Outflow.
-   - Liquidity Coverage Ratio = Inflow / (Outflow + 1.0).
-   - Deficit Months Count = Total months where Outflow exceeded Inflow.
+B. Flow Divergence & Cash Burn Runway:
+   - `flow_divergence_slope` = `inflow_slope - outflow_slope` (captures liquidity bleed).
+   - `cash_burn_rate_m1` = `m1_outflow_total / (bal_mean + 1.0)`.
+   - `liquidity_runway_months` = `m1_daily_avg_bal / (m1_outflow_total + 1.0)`.
 
-C. Stress Acceleration (Second Derivative):
-   - Formula: `(M1 - M2) - (M2 - M3)`.
-   - Captures whether a customer's decline is speeding up in the most recent month.
+C. Activity Freezing & Silences:
+   - `m1_activity_freeze_ratio`: M1 transactions vs expected 30-day activity from 90d baseline.
+   - Sudden drop-to-zero flags for each transaction channel.
 
-D. Balance Volatility & Drawdown Distress:
-   - Balance Standard Deviation (`bal_std`) and Coefficient of Variation (`bal_cv`).
-   - Rock-Bottom Score: `(M1_bal - Min_bal) / (Max_bal - Min_bal + 1e-4)`.
-   - Consecutive balance drop counter (how many months in a row balance fell).
+D. Emergency Liquidity Drawdown:
+   - Simultaneous surge in `withdraw` and `transfer_from_bank` relative to daily average balance.
 
 E. Spending Diversity & Shannon Entropy:
    - Shannon entropy across the 4 outflow channels.
    - Stressed customers collapse spending diversity down to emergency cash withdrawals.
 
-F. Sudden Activity Drop-Offs (Silences):
-   - Flags customers who were consistently active in M2-M6 but showed 0 activity in M1.
+F. Stress Acceleration (Second Derivative):
+   - Formula: `(M1 - M2) - (M2 - M3)`.
+   - Captures whether a customer's decline is speeding up in the most recent month.
 
 G. Peer-Relative Benchmarks:
    - Customer ARPU and balance compared against their specific region and segment averages.
@@ -155,76 +148,66 @@ H. Composite Heuristic Stress Index:
      and dropped channels (ranks in the Top 5 most important features across models).
 
 ================================================================================
-STEP 6: MODEL ARCHITECTURE SELECTION
+STEP 6: HIGH-CAPACITY MODEL SUITE
 ================================================================================
-We trained multiple complementary model families:
+We train multiple complementary model families:
 
-1. LightGBM (Light Gradient Boosting Machine):
-   - Fast histogram-based leaf-wise tree growth.
-   - Hyperparameters: 1200 trees, lr=0.02, num_leaves=39, colsample_bytree=0.65.
-   - Top strength: Handles non-linear feature interactions and high-dimensional signals.
+1. LightGBM (GBDT):
+   - 1500 trees, learning_rate=0.018, num_leaves=41, colsample_bytree=0.65.
+   - Captures deep non-linear interactions across structured tabular features.
 
-2. XGBoost (Extreme Gradient Boosting):
-   - Depth-wise tree boosting with strong L2 regularization (`reg_lambda=2.0`).
-   - Top strength: Robust against overfitting on noisy financial counters.
+2. LightGBM (DART Booster):
+   - Drops trees randomly during training (dropout rate = 0.1, skip drop = 0.5).
+   - Prevents tree co-adaptation and over-reliance on early features.
 
-3. HistGradientBoostingClassifier (Scikit-Learn):
-   - Native binned gradient boosting providing independent tree split decisions.
+3. XGBoost (Histogram):
+   - 1200 trees, learning_rate=0.018, max_depth=6, subsample=0.85, reg_lambda=3.0.
+   - Provides complementary tree splits and robust regularization.
 
-4. Random Forest (Bagging):
-   - 400 randomized decision trees voting in parallel.
-   - Top strength: Drastically reduces variance and provides decorrelated predictions from boosting.
+4. HistGradientBoosting (Scikit-Learn):
+   - Fast histogram binner with native missing value support.
 
-5. PyTorch Deep Tabular ResMLP:
+5. Random Forest (Bagging):
+   - 500 randomized decision trees voting in parallel.
+   - Provides decorrelated variance reduction.
+
+6. PyTorch Deep Tabular ResMLP:
    - Multi-layer Perceptron with BatchNorm, Mish activations, Dropout, and Residual Skip Connections.
-   - Top strength: Learns smooth, continuous representations that tree partitions cannot.
+   - Learns smooth continuous embeddings of financial variables.
 
 ================================================================================
-STEP 7: MULTI-MODEL ENSEMBLING, BLENDING & RANK OPTIMIZATION
+STEP 7: MULTI-MODEL ENSEMBLING, BLENDING & LOGIT OPTIMIZATION
 ================================================================================
-Why Ensemble? Different models make different types of mistakes. Combining them lowers error.
-
 1. SLSQP Optimal Probability Blending:
-   - Uses SciPy Sequential Least Squares Programming to calculate optimal weights
-     $w_1, w_2, ..., w_k$ summing to 1.0 that minimize Out-of-Fold Log Loss:
-     $\min_w \text{LogLoss}(y_{true}, \sum w_i P_i)$
-   - Resulting blend: ~53% LightGBM + ~44% XGBoost + ~3% PyTorch MLP.
+   - Solves for non-negative weights $(w_1, ..., w_k)$ summing to 1.0 minimizing OOF loss:
+     $\min_w \text{LogLoss}(y_{true}, \sum w_i P_i) - 0.05 \times \text{ROC\_AUC}$
 
-2. Rank Averaging (ROC-AUC Optimization):
-   - Converts raw probabilities into uniform percentile ranks before averaging.
-   - Prevents calibration mismatch between models from hurting overall ROC-AUC ranking.
+2. Logit-Space Blending:
+   - Blends in log-odds space: $\text{Sigmoid}(\sum w_i \text{logit}(P_i))$.
+   - Preserves sharp extreme confidence without probability compression.
 
-================================================================================
-STEP 8: LEADERBOARD ITERATIONS & SCORE INTERPRETATION
-================================================================================
-Understanding the Scores on Zindi:
-1. When Evaluated on Log Loss (Error Metric):
-   - Lower is BETTER.
-   - Baseline / Neutral default: ~0.693 to 0.701.
-   - Upgraded Model: ~0.286 OOF (on full train), 0.6708 public.
-   - When score moved from 0.7013 down to 0.6708, the model error dropped (improved).
-
-2. When Evaluated on ROC-AUC (Ranking Metric):
-   - Higher is BETTER (1.0 is perfect).
-   - Our 5-fold CV achieves ~0.872 ROC-AUC on full dataset.
-
-3. Quick Mode vs Full Mode:
-   - Running with `--quick` trains on a small 10,000-row sample for quick code checks.
-   - Running full `python train.py` trains on all 40,000 samples for maximum performance.
+3. Rank Averaging (ROC-AUC Optimization):
+   - Normalizes probabilities into uniform percentile ranks before averaging.
 
 ================================================================================
-STEP 9: EXECUTION GUIDE (STEP-BY-STEP COMMANDS)
+STEP 8: LEADERBOARD METRICS & SCORE INTERPRETATION
+================================================================================
+- Multi Score on Zindi: Combines ROC-AUC ranking power with calibrated probability loss.
+- Target Leaderboard Score: > 0.7394 for Rank 1.
+- Why Full 40,000 Training Matters: Subsampling in quick mode (10,000 rows) causes
+  sample sparsity on 367 features. Training on 100% of data (40,000 rows) across 10 folds
+  unlocks the full predictive capacity of the ensemble.
+
+================================================================================
+STEP 9: EXECUTION GUIDE (HOW TO RUN FULL TRAINING)
 ================================================================================
 1. Activate Environment (Windows Git Bash):
    $ source venv/Scripts/activate
 
-2. Run Full Model Training:
+2. Run Full 10-Fold Model Training on all 40,000 samples:
    $ python train.py
 
-3. Run Quick Test Mode (for fast verification):
-   $ python train.py --quick
-
-4. Submission Files Output:
+3. Output Location:
    - Primary Submission CSV: `model/data/submissions/submission.csv`
    - Upload `submission.csv` directly to the Zindi competition portal.
 
@@ -239,7 +222,7 @@ A: The objective is early intervention for customers at risk of mobile-money liq
 Q2: Why not rely on standard accuracy for evaluation?
 A: The dataset has an 85% negative / 15% positive class imbalance. A trivial dummy
    model predicting zero achieves 85% accuracy but is commercially useless. We evaluate
-   using Log Loss and ROC-AUC with Stratified 5-Fold Cross-Validation.
+   using Log Loss and ROC-AUC with Stratified 10-Fold Cross-Validation.
 
 Q3: How do you guarantee that no data leakage occurred in your pipeline?
 A: Preprocessing steps, such as categorical target encoding and scaling, are computed

@@ -9,12 +9,18 @@ from pathlib import Path
 # Add project root to sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from src.config import TARGET_COL, ID_COL, SUBMISSION_DIR, MODELS_DIR, SEED
+from src.config import TARGET_COL, ID_COL, SUBMISSION_DIR, MODELS_DIR, SEED, N_SPLITS
 from src.utils import set_seed, get_logger, evaluate_predictions, format_and_save_submission
 from src.data import load_raw_data
 from src.features import engineer_features
 from src.validation import train_cv_model
-from src.ensemble import optimize_ensemble_weights, compute_blend_predictions, compute_rank_average, train_stacking_meta_learner
+from src.ensemble import (
+    optimize_ensemble_weights,
+    compute_blend_predictions,
+    compute_logit_blend,
+    compute_rank_average,
+    train_stacking_meta_learner
+)
 from src.persistence import (
     prepare_full_features,
     refit_and_save_model,
@@ -26,9 +32,14 @@ logger = get_logger("train_pipeline")
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Zindi Financial Stress Prediction Training Pipeline")
-    parser.add_argument("--models", nargs="+", default=["lightgbm", "xgboost", "hist_gbm", "random_forest", "pytorch_mlp"],
-                        help="List of models to train (lightgbm, xgboost, hist_gbm, random_forest, extra_trees, pytorch_mlp)")
-    parser.add_argument("--quick", action="store_true", help="Run quick baseline mode with fewer iterations")
+    parser.add_argument(
+        "--models",
+        nargs="+",
+        default=["lightgbm", "lightgbm_dart", "xgboost", "hist_gbm", "random_forest", "pytorch_mlp"],
+        help="List of models to train (lightgbm, lightgbm_dart, xgboost, hist_gbm, random_forest, extra_trees, pytorch_mlp)"
+    )
+    parser.add_argument("--quick", action="store_true", help="Run quick baseline mode with fewer iterations on subsample")
+    parser.add_argument("--folds", type=int, default=None, help="Number of cross-validation folds (default: 10 full, 5 quick)")
     parser.add_argument("--seed", type=int, default=SEED, help="Random seed")
     return parser.parse_args()
 
@@ -36,8 +47,11 @@ def main():
     args = parse_args()
     set_seed(args.seed)
 
+    n_splits = args.folds if args.folds is not None else (5 if args.quick else N_SPLITS)
+
     logger.info("==========================================================")
-    logger.info("   ZINDI FINANCIAL STRESS PREDICTION - UPGRADED ENGINE V2 ")
+    logger.info("   ZINDI FINANCIAL STRESS PREDICTION - GRAND MASTER V3   ")
+    logger.info(f"   Mode: {'QUICK (10k sample)' if args.quick else 'FULL DATA (40,000 samples)'} | Folds: {n_splits}")
     logger.info("==========================================================")
 
     # 1. Load Data
@@ -45,15 +59,15 @@ def main():
 
     # Quick mode adjustments if requested
     if args.quick:
-        logger.info("Quick mode enabled: Subsampling 10,000 train rows for fast baseline run.")
+        logger.info("Quick mode enabled: Subsampling 10,000 train rows for fast baseline verification.")
         train_df = train_df.sample(n=10000, random_state=args.seed).reset_index(drop=True)
 
     # 2. Engineer Features
-    logger.info("Running Advanced Feature Engineering Pipeline on Train and Test...")
+    logger.info("Running Grand Master Feature Engineering Pipeline on Train and Test...")
     train_fe = engineer_features(train_df)
     test_fe = engineer_features(test_df)
 
-    # 3. Train Models via 5-Fold Stratified CV
+    # 3. Train Models via Stratified CV
     oof_dict = {}
     test_dict = {}
     model_summaries = []
@@ -62,19 +76,22 @@ def main():
     if args.quick:
         # Reduced iterations for fast verification
         lgb_params = {'n_estimators': 150, 'learning_rate': 0.05}
+        lgb_dart_params = {'n_estimators': 120, 'learning_rate': 0.05}
         xgb_params = {'n_estimators': 150, 'learning_rate': 0.05}
         hgb_params = {'max_iter': 100, 'learning_rate': 0.05}
         rf_params = {'n_estimators': 100}
         mlp_params = {'epochs': 10}
     else:
-        lgb_params = {'n_estimators': 1200, 'learning_rate': 0.02}
-        xgb_params = {'n_estimators': 1000, 'learning_rate': 0.02}
-        hgb_params = {'max_iter': 800, 'learning_rate': 0.025}
-        rf_params = {'n_estimators': 400}
+        lgb_params = {'n_estimators': 1500, 'learning_rate': 0.018}
+        lgb_dart_params = {'n_estimators': 1200, 'learning_rate': 0.025}
+        xgb_params = {'n_estimators': 1200, 'learning_rate': 0.018}
+        hgb_params = {'max_iter': 900, 'learning_rate': 0.02}
+        rf_params = {'n_estimators': 500}
         mlp_params = {'epochs': 25}
 
     param_map = {
         'lightgbm': lgb_params,
+        'lightgbm_dart': lgb_dart_params,
         'xgboost': xgb_params,
         'hist_gbm': hgb_params,
         'random_forest': rf_params,
@@ -84,7 +101,7 @@ def main():
     for m_name in selected_models:
         m_params = param_map.get(m_name, {})
         try:
-            results = train_cv_model(m_name, train_fe, test_fe, model_params=m_params)
+            results = train_cv_model(m_name, train_fe, test_fe, model_params=m_params, n_splits=n_splits)
             oof_dict[m_name] = results['oof_probs']
             test_dict[m_name] = results['test_probs']
 
@@ -116,13 +133,12 @@ def main():
         sys.exit(1)
 
     # -------------------------------------------------------------------
-    # 3b. Full-data refit for persistence (does NOT alter OOF metrics)
+    # 3b. Full-data refit for persistence
     # -------------------------------------------------------------------
     logger.info("Preparing full-data features for model persistence refits...")
     X_train_full, X_test_full, te_maps, feature_cols = prepare_full_features(train_fe, test_fe)
     y_train_full = train_fe[TARGET_COL].values
 
-    # Save TE maps + feature column order so predict.py can replicate preprocessing
     save_te_artifacts(te_maps, feature_cols, MODELS_DIR)
 
     logger.info("Refitting models on full training data for persistence...")
@@ -149,35 +165,42 @@ def main():
     if len(oof_dict) > 1:
         logger.info("Computing Optimal Ensemble Weights...")
         best_weights, weight_dict = optimize_ensemble_weights(oof_dict, y_true)
+        
+        # Standard Weighted Blend
         blend_oof, blend_test = compute_blend_predictions(oof_dict, test_dict, best_weights)
         blend_metrics = evaluate_predictions(y_true, blend_oof)
-        logger.info(f"==> OPTIMAL WEIGHTED BLEND OOF | Log Loss: {blend_metrics['log_loss']:.5f} | ROC-AUC: {blend_metrics['roc_auc']:.5f} <==")
+        logger.info(f"==> OPTIMAL PROBABILITY BLEND OOF | Log Loss: {blend_metrics['log_loss']:.5f} | ROC-AUC: {blend_metrics['roc_auc']:.5f} <==")
+
+        # Logit Space Blend
+        logit_oof, logit_test = compute_logit_blend(oof_dict, test_dict, best_weights)
+        logit_metrics = evaluate_predictions(y_true, logit_oof)
+        logger.info(f"==> LOGIT-SPACE BLEND OOF         | Log Loss: {logit_metrics['log_loss']:.5f} | ROC-AUC: {logit_metrics['roc_auc']:.5f} <==")
 
         # Rank Averaging
         rank_oof, rank_test = compute_rank_average(oof_dict, test_dict, best_weights)
         rank_metrics = evaluate_predictions(y_true, rank_oof)
-        logger.info(f"==> RANK-AVERAGED BLEND OOF    | Log Loss: {rank_metrics['log_loss']:.5f} | ROC-AUC: {rank_metrics['roc_auc']:.5f} <==")
+        logger.info(f"==> RANK-AVERAGED BLEND OOF        | Log Loss: {rank_metrics['log_loss']:.5f} | ROC-AUC: {rank_metrics['roc_auc']:.5f} <==")
 
         # Stacking Meta Learner
         meta_oof, meta_test, meta_metrics = train_stacking_meta_learner(oof_dict, test_dict, y_true)
 
-        # Pick best strategy based on Log Loss & ROC-AUC
-        if blend_metrics['log_loss'] <= meta_metrics['log_loss']:
-            logger.info("Selected OPTIMAL WEIGHTED BLEND for final primary submission.")
+        # Select best calibrated strategy for primary submission
+        if logit_metrics['log_loss'] <= blend_metrics['log_loss']:
+            logger.info("Selected LOGIT-SPACE BLEND for final primary submission.")
+            best_test_preds = logit_test
+            final_oof_loss = logit_metrics['log_loss']
+            final_oof_auc = logit_metrics['roc_auc']
+            selected_strategy = "logit_blend"
+            strategy_metrics = logit_metrics
+        else:
+            logger.info("Selected PROBABILITY BLEND for final primary submission.")
             best_test_preds = blend_test
             final_oof_loss = blend_metrics['log_loss']
             final_oof_auc = blend_metrics['roc_auc']
             selected_strategy = "weighted_blend"
             strategy_metrics = blend_metrics
-        else:
-            logger.info("Selected STACKING META-LEARNER for final primary submission.")
-            best_test_preds = meta_test
-            final_oof_loss = meta_metrics['log_loss']
-            final_oof_auc = meta_metrics['roc_auc']
-            selected_strategy = "stacking"
-            strategy_metrics = meta_metrics
 
-        # Persist ensemble config (weights + strategy) for predict.py
+        # Persist ensemble config
         save_ensemble_config(
             weight_dict=weight_dict,
             model_names=list(oof_dict.keys()),
@@ -196,7 +219,6 @@ def main():
         selected_strategy = "single_model"
         strategy_metrics = {"log_loss": final_oof_loss, "roc_auc": final_oof_auc}
         single_weight = {m_single: 1.0}
-        # Persist ensemble config for single-model case
         save_ensemble_config(
             weight_dict=single_weight,
             model_names=[m_single],
@@ -233,10 +255,10 @@ def main():
         "timestamp": run_ts,
         "git_commit": get_git_commit(),
         "model": "ensemble" if selected_strategy != "single_model" else list(test_dict.keys())[0],
-        "model_version": None,
-        "feature_version": "v1",
+        "model_version": "v3_grandmaster",
+        "feature_version": "v3",
         "feature_count": len(train_fe.columns) - 1,
-        "cv_folds": N_SPLITS,
+        "cv_folds": n_splits,
         "hyperparameters": {s['Model']: s['_params'] for s in model_summaries},
         "training_metrics": None,
         "validation_metrics": None,
@@ -244,11 +266,11 @@ def main():
         "generalization_gap": None,
         "ensemble_information": {
             "strategy": selected_strategy,
-            "weights": weight_dict if selected_strategy == "weighted_blend" else None
+            "weights": weight_dict if selected_strategy in ["weighted_blend", "logit_blend"] else None
         },
         "training_time": None,
         "status": "completed",
-        "notes": f"Quick mode: {args.quick}"
+        "notes": f"Grand Master training run with {n_splits}-fold CV"
     }
 
     experiment_record["_base_models"] = [
@@ -262,7 +284,7 @@ def main():
         for s in model_summaries
     ]
 
-    run_json_path = experiments_dir / f"run_{run_ts}.json"
+    run_json_path = experiments_dir / f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
     with open(run_json_path, "w") as f:
         json.dump(experiment_record, f, indent=2)
     logger.info(f"Experiment record saved to {run_json_path}")
