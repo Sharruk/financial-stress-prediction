@@ -36,11 +36,11 @@ def compute_shannon_entropy(matrix):
 
 def engineer_features(data_df):
     """
-    Grand Master v4 Feature Engineering Pipeline (~450+ high-signal features).
-    Extracts deep domain, multi-lag velocity, rolling statistics, group z-scores,
-    activity bitmasks, and liquidity strain signals.
+    Grand Master v5 Feature Engineering Pipeline (~480+ high-signal features).
+    Extracts panic indicators, multi-lag velocity, single-day shock drains,
+    P2P net reliance, financial personas, and liquidity strain signals.
     """
-    logger.info("Starting Grand Master v4 feature engineering pipeline...")
+    logger.info("Starting Grand Master v5 feature engineering pipeline...")
     df = data_df.copy()
     new_cols = {}
     
@@ -104,7 +104,6 @@ def engineer_features(data_df):
     # 2. Balance Trajectory, Multi-Month Lags, Volatility & Strain
     # -------------------------------------------------------------
     logger.info("Computing balance multi-lags, rolling stats & drawdowns...")
-    # Matrix ordered M6 (col 0) to M1 (col 5)
     bal_matrix = df[BALANCE_COLS[::-1]].values.astype(np.float32)
     
     new_cols['bal_slope'] = compute_linear_slope(bal_matrix)
@@ -150,9 +149,9 @@ def engineer_features(data_df):
     new_cols['consecutive_bal_drops_count'] = bal_drops
 
     # -------------------------------------------------------------
-    # 3. Monthly Inflows, Outflows, Imbalance & Liquidity Strain
+    # 3. Monthly Inflows, Outflows, Panic Indicators & Liquidity Strain
     # -------------------------------------------------------------
-    logger.info("Computing monthly inflows, outflows, strain ratios & cashflow dynamics...")
+    logger.info("Computing monthly inflows, outflows, panic signals & cashflow dynamics...")
     m_inflows = []
     m_outflows = []
     m_nets = []
@@ -180,11 +179,22 @@ def engineer_features(data_df):
         new_cols[f'{m_str}_net_cashflow'] = net
         m_nets.append(net)
         
-        # Deficit and Strain Ratios
         m_deficit_flags.append((net < 0).astype(int))
         new_cols[f'{m_str}_coverage_ratio'] = inflow / (outflow + 1.0)
         new_cols[f'{m_str}_outflow_to_bal'] = outflow / (df[f'{m_str}_daily_avg_bal'] + 1.0)
         new_cols[f'{m_str}_inflow_outflow_imbalance'] = (inflow - outflow) / (inflow + outflow + 1.0)
+        
+        # P2P Net Reliance Index per month: (received - mm_send) / (received + mm_send + 1.0)
+        p2p_rec = df[f'{m_str}_received_total_value'] if f'{m_str}_received_total_value' in df.columns else 0
+        p2p_send = df[f'{m_str}_mm_send_total_value'] if f'{m_str}_mm_send_total_value' in df.columns else 0
+        new_cols[f'{m_str}_p2p_net_reliance'] = (p2p_rec - p2p_send) / (p2p_rec + p2p_send + 1.0)
+        
+        # Emergency physical cash vs Commercial payments ratio
+        emerg_val = (df[f'{m_str}_withdraw_total_value'] if f'{m_str}_withdraw_total_value' in df.columns else 0) + \
+                    (df[f'{m_str}_transfer_from_bank_total_value'] if f'{m_str}_transfer_from_bank_total_value' in df.columns else 0)
+        comm_val = (df[f'{m_str}_merchantpay_total_value'] if f'{m_str}_merchantpay_total_value' in df.columns else 0) + \
+                   (df[f'{m_str}_paybill_total_value'] if f'{m_str}_paybill_total_value' in df.columns else 0)
+        new_cols[f'{m_str}_emergency_vs_commercial_ratio'] = emerg_val / (comm_val + 1.0)
 
     # Multi-month inflow/outflow velocity differences
     for i in range(1, 6):
@@ -192,10 +202,28 @@ def engineer_features(data_df):
         new_cols[f'outflow_diff_m{i}_m{i+1}'] = m_outflows[i-1] - m_outflows[i]
         new_cols[f'net_cashflow_diff_m{i}_m{i+1}'] = m_nets[i-1] - m_nets[i]
 
+    # Inflow Collapse Index: M1 Inflow vs 6-Month Inflow Mean
+    inflow_matrix = np.column_stack([m_inflows[5-i] for i in range(6)]).astype(np.float32)
+    inflow_mean_6m = np.mean(inflow_matrix, axis=1)
+    new_cols['inflow_mean_6m'] = inflow_mean_6m
+    new_cols['inflow_m1_vs_6m_mean_ratio'] = new_cols['m1_inflow_total'] / (inflow_mean_6m + 1.0)
+    new_cols['inflow_collapse_flag'] = (new_cols['m1_inflow_total'] < (0.5 * inflow_mean_6m)).astype(np.float32)
+
+    # Single-Day Shock Drain Proxy: Largest single transaction in M1 vs daily average balance
+    m1_highest_any = np.maximum.reduce([df[f'm1_{t}_highest_amount'].values for t in TRANSACTION_TYPES if f'm1_{t}_highest_amount' in df.columns])
+    new_cols['m1_single_shock_drain_ratio'] = m1_highest_any / (df['m1_daily_avg_bal'].values + 1.0)
+    new_cols['m1_single_shock_wiped_account'] = (m1_highest_any >= df['m1_daily_avg_bal'].values).astype(np.float32)
+
+    # Consecutive month-over-month Degradation Streaks (Balance down AND Deficit)
+    degrade_streaks = sum(
+        ((df[f'm{i}_daily_avg_bal'] < df[f'm{i+1}_daily_avg_bal']) & (m_nets[i-1] < 0)).astype(int)
+        for i in range(1, 6)
+    )
+    new_cols['consecutive_degradation_streaks'] = degrade_streaks
+
     # 6-Month Deficit Month Count
     new_cols['total_deficit_months_6m'] = np.sum(m_deficit_flags, axis=0)
 
-    inflow_matrix = np.column_stack([m_inflows[5-i] for i in range(6)]).astype(np.float32)
     outflow_matrix = np.column_stack([m_outflows[5-i] for i in range(6)]).astype(np.float32)
     net_matrix = np.column_stack([m_nets[5-i] for i in range(6)]).astype(np.float32)
     vol_matrix = np.column_stack([m_vols[5-i] for i in range(6)]).astype(np.float32)
@@ -315,7 +343,8 @@ def engineer_features(data_df):
         (-new_cols['bal_slope'] * 0.25) +
         (new_cols['total_deficit_months_6m'] * 0.3) +
         (new_cols['m1_outflow_to_bal_ratio'] * 0.2) +
-        (new_cols['total_zero_activity_m1'] * 0.25)
+        (new_cols['total_zero_activity_m1'] * 0.25) +
+        (new_cols['inflow_collapse_flag'] * 0.2)
     )
     new_cols['composite_stress_index'] = stress_idx
     
@@ -327,5 +356,5 @@ def engineer_features(data_df):
     num_cols = df.select_dtypes(include=[np.number]).columns
     df[num_cols] = df[num_cols].replace([np.inf, -np.inf], np.nan).fillna(0.0)
     
-    logger.info(f"Grand Master v4 Feature engineering completed! Total columns: {df.shape[1]}")
+    logger.info(f"Grand Master v5 Feature engineering completed! Total columns: {df.shape[1]}")
     return df
