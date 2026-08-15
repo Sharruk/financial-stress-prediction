@@ -3,9 +3,8 @@ FROM python:3.10-slim
 WORKDIR /app
 
 # Install dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-RUN pip install --no-cache-dir fastapi uvicorn streamlit plotly
+COPY requirements-web.txt .
+RUN pip install --no-cache-dir -r requirements-web.txt
 
 # Copy application
 COPY . .

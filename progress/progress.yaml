@@ -1,22 +1,22 @@
 project_name: "Zindi Financial Stress Prediction"
 status:
-  Data ingestion: COMPLETED
-  Data cleaning: COMPLETED
-  Feature engineering: COMPLETED
-  Cross-validation: COMPLETED
-  Model training: COMPLETED
-  OOF prediction: COMPLETED
-  Ensembling: COMPLETED
-  Submission generation: COMPLETED
-  Model persistence: COMPLETED
-  Inference pipeline: COMPLETED
-  Experiment tracking: COMPLETED
-  Evaluation metrics: COMPLETED
-  Dashboard: COMPLETED
-  API: COMPLETED
-  Testing: COMPLETED
-  Docker: COMPLETED
-  Documentation: COMPLETED
-  Project Management Directives: COMPLETED
+  Data ingestion: IMPLEMENTED
+  Data cleaning: IMPLEMENTED
+  Feature engineering: IMPLEMENTED
+  Cross-validation: IMPLEMENTED
+  Model training: PENDING TRAINING MACHINE
+  OOF prediction: PENDING TRAINING MACHINE
+  Ensembling: PENDING TRAINING MACHINE
+  Submission generation: PENDING TRAINING MACHINE
+  Model persistence: IMPLEMENTED
+  Inference pipeline: VERIFIED
+  Experiment tracking: IMPLEMENTED
+  Evaluation metrics: VERIFIED
+  Dashboard: VERIFIED
+  API: VERIFIED
+  Testing: VERIFIED
+  Docker: VERIFIED
+  Documentation: VERIFIED
+  Project Management Directives: VERIFIED
   Explainability: PLANNED
   Deployment: PLANNED

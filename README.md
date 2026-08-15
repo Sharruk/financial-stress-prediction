@@ -1,82 +1,232 @@
-# Zindi Financial Stress Prediction ML Engine (v2.0)
+# Financial Stress Prediction Challenge — ML Engineering Project
 
-A high-performance, modular machine learning pipeline built specifically for the **Zindi Financial Stress Prediction Challenge**.
+This repository serves as the Machine Learning Algorithms Laboratory project for our team. We are actively participating in the Zindi Financial Stress Prediction Challenge, implementing an end-to-end Machine Learning Engineering pipeline to predict and analyze financial stress.
 
----
+## Team
 
-## 🏆 Model Highlights & Strategy
+| Name | Register No. | Zindi Username | Role |
+|---|---|---|---|
+| Nathaniel Christian | 3122247001037 | NathanielC | Team Member |
+| Shalini M | 3122247001060 | shalini_1506 | Team Member |
+| Sharruk S | 3122247001061 | Sharruk_S | Team Leader |
 
-1. **Leak-Free 5-Fold Stratified Cross-Validation**:
-   - Preserves exact 85/15 target class distribution across folds.
-   - Fold-aware out-of-fold target encoding prevents any data leakage.
-2. **Domain Financial & Temporal Feature Engineering (297 Total Features)**:
-   - **Linear Slopes ($M6 \rightarrow M1$)**: Balance, inflow, outflow, and net cashflow trends.
-   - **Net Cashflow & Liquidity**: Inflows vs. Outflows, coverage ratios, and outflow-to-balance pressure indicators.
-   - **Recency & Volatility**: $M1$ vs. $M6$ ratios and differences, balance standard deviation ($\sigma_{bal}$), and coefficient of variation ($CV$).
-   - **Transaction Silences & Drop-offs**: Sudden zero-activity flags in $M1$ following active history.
-3. **Multi-Model Ensembling Engine**:
-   - Combines **LightGBM**, **XGBoost**, **Random Forest**, and a **PyTorch Tabular MLP**.
-   - Automatic SciPy SLSQP optimization for weighted probability blending.
+## Mentor
 
----
+**Ajay Kumar Reddy Poreddy**  
+Assistant Professor  
+Department of Computer Science and Engineering  
+Sri Sivasubramaniya Nad(ar) College of Engineering  
 
-## 📁 Repository Structure
+Email: ajaykumarreddyp@ssn.edu.in  
+Course: **ICS1512 – Machine Learning Algorithms Laboratory**
 
+## Competition
+
+**Financial Stress Prediction Challenge - July Starter Track**
+
+Platform: Zindi  
+Competition period: 01 July 2026 – 28 September 2026  
+Competition link: [https://zindi.africa/competitions/financial-stress-prediction-challenge-2026-07-01](https://zindi.africa/competitions/financial-stress-prediction-challenge-2026-07-01)
+
+## About the Competition / Dataset
+
+The objective is to predict whether a customer is likely to experience financial stress within the next 30 days using six months of mobile money transaction history.
+
+The dataset contains information related to:
+- customer/mobile money transaction behaviour
+- balances
+- deposits
+- withdrawals
+- MM Send activity
+- monthly transaction behaviour
+- categorical customer information
+- target financial-stress label
+
+Our project focuses heavily on implementing a rigorous ML engineering lifecycle, specifically:
+- Data preprocessing
+- EDA
+- Feature engineering
+- Machine learning
+- Cross-validation
+- Model evaluation
+- Ensemble methods
+- Prediction
+- Competition submission
+
+## Current Progress
+
+**Project completion: ~70%**
+
+`███████░░░ 70%`
+
+The engineering and ML pipeline has been substantially implemented, including data preparation, feature engineering, model development, validation infrastructure, model persistence, experiment tracking, API, Streamlit dashboard, testing, and Docker support. 
+
+However, the competition is still ongoing and the final model/competition result has NOT been finalized. The 70% metric refers strictly to the current project implementation and infrastructure snapshot.
+
+## Current Zindi Result
+
+Current best displayed public score:  
+**0.704044593**  
+*(Approximately **0.7040**)*
+
+Submitter: **NathanielC**
+
+> This is the current best public Zindi score at this stage of the competition. It is NOT the final competition result. The README will be updated after the competition ends.
+
+## Project Pipeline
+
+```text
+Raw Data
+   ↓
+Data Cleaning
+   ↓
+EDA
+   ↓
+Feature Engineering
+   ↓
+Feature Selection / Model Preparation
+   ↓
+Cross-Validation
+   ↓
+Model Training
+   ↓
+Evaluation
+   ↓
+Ensembling
+   ↓
+Model Persistence
+   ↓
+Prediction
+   ↓
+Submission
+   ↓
+Experiment Tracking
+   ↓
+FastAPI
+   ↓
+Streamlit Dashboard
 ```
-model/
+
+The web platform (FastAPI + Streamlit) provides deep visibility into the project's status, tracking experiment results, comprehensive model metrics, bias/variance information, and ensemble configurations statelessly.
+
+## Repository Structure
+
+```text
+financial-stress-prediction/
+│
+├── api/
+│   ├── main.py
+│   └── dependencies.py
+│
+├── app/
+│   ├── streamlit_app.py
+│   ├── components/
+│   │   └── charts.py
+│   └── pages/
+│       ├── 1_Overview.py
+│       ├── 2_Project_Progress.py
+│       ├── 3_Model_Leaderboard.py
+│       ├── 4_Model_Metrics.py
+│       ├── 5_Bias_Variance.py
+│       └── 6_Ensemble_Analysis.py
+│
 ├── data/
-│   ├── raw/                 # Original Train.csv, Test.csv, SampleSubmission.csv
-│   └── submissions/         # Generated Zindi submission CSV and ZIP files
+│   ├── raw/
+│   ├── processed/
+│   └── submissions/
+│
+├── experiments/
+│   └── schema.json
+│
+├── models/
+│
+├── notebooks/
+│
+├── progress/
+│   ├── README.md
+│   └── progress.yaml
+│
 ├── src/
-│   ├── config.py            # Central paths, seed, and column definitions
-│   ├── data.py              # Raw data loader and validator
-│   ├── features.py          # Domain feature engineering pipeline
-│   ├── models.py            # LightGBM, XGBoost, Random Forest, PyTorch MLP wrappers
-│   ├── validation.py        # 5-Fold Stratified CV engine with fold-aware target encoding
-│   ├── ensemble.py          # SciPy weight optimization & stacking meta-learner
-│   └── utils.py             # Metrics, logging, submission & ZIP packager
-├── train.py                 # Main CLI script to run training & build submissions
-├── predict.py               # Standalone inference script
-└── requirements.txt         # Pinned Python dependencies
+│   ├── config.py
+│   ├── data.py
+│   ├── features.py
+│   ├── models.py
+│   ├── ensemble.py
+│   ├── persistence.py
+│   ├── utils.py
+│   └── validation.py
+│
+├── tests/
+│
+├── train.py
+├── predict.py
+├── requirements.txt
+├── requirements-web.txt
+├── Dockerfile
+└── docker-compose.yml
 ```
 
----
+## Implementation Workflow
 
-## 🚀 How to Run and Train the Model
+### Step 1 — Data and ML Pipeline
+The ML pipeline is heavily implemented through:
+- `train.py`
+- `predict.py`
+- `src/`
 
-### 1. Install Dependencies
-```bash
-pip install -r requirements.txt
-```
+`src/` contains reusable modules for:
+- configuration
+- data processing
+- feature engineering
+- model definitions
+- validation
+- ensembling
+- persistence
+- evaluation utilities
 
-### 2. Run Full Model Training & Submission Generation
-To run full 5-Fold Stratified CV across all 40,000 training rows with all models:
-```bash
-python train.py
-```
-This will:
-- Load the raw data and run the feature engineering pipeline.
-- Train LightGBM, XGBoost, Random Forest, and PyTorch MLP models using 5-Fold CV.
-- Calculate OOF Log Loss and ROC-AUC metrics.
-- Find the optimal ensemble weights.
-- Generate `submission.csv` and a timestamped `.zip` archive inside `data/submissions/`.
+### Step 2 — Experiment Tracking
+Training results and comprehensive evaluations are recorded into:
+`experiments/`
 
-### 3. Run Quick Verification Mode
-For quick debugging or testing pipeline changes:
-```bash
-python train.py --quick
-```
+The strict experiment schema governing these logs is defined in:
+`experiments/schema.json`
 
-### 4. Custom Model Training
-To train specific models only (e.g. LightGBM and XGBoost):
-```bash
-python train.py --models lightgbm xgboost
-```
+### Step 3 — API
+FastAPI exposes project metadata and serves experiment/model information as a stateless API layer.
 
----
+### Step 4 — Streamlit
+Streamlit consumes the API to provide the visual interactive diagnostic dashboard.
 
-## 📤 Submitting to Zindi
+### Step 5 — Docker
+Docker fully containerizes the web/API layer, running the dashboard safely separate from the expensive ML training environment.
 
-1. Locate the generated submission zip file inside `data/submissions/` (e.g., `zindi_stress_sub_20260813_144515.zip` or `submission.csv`).
-2. Go to the Zindi competition submission tab and upload the `.zip` or `.csv` file.
-3. Track your public leaderboard score and compare it with the Out-Of-Fold (OOF) Log Loss / ROC-AUC score reported in terminal logs.
+## How to Run
+
+### A. Run the ML Pipeline (Training Machine)
+On a machine with sufficient computational resources intended for ML training:
+
+1. Install the full ML dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+2. Place the dataset files into `data/raw/`.
+3. Run the training pipeline:
+   ```bash
+   python train.py
+   ```
+4. Generate predictions and submissions:
+   ```bash
+   python predict.py
+   ```
+
+### B. Start the Web Platform (Development/Local Machine)
+To run the lightweight FastAPI server and Streamlit dashboard using Docker:
+
+1. Start the containers using Docker Compose:
+   ```bash
+   docker compose up -d --build
+   ```
+2. The FastAPI documentation will be available at `http://localhost:8000/docs`
+3. The Streamlit dashboard will be available at `http://localhost:8501`
+
+*(Alternatively, run locally by installing `requirements-web.txt` and launching `uvicorn` and `streamlit` manually).*

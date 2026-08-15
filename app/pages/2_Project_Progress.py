@@ -17,20 +17,20 @@ else:
     tasks = status.get("status", {})
     
     col1, col2, col3 = st.columns(3)
-    completed = [k for k, v in tasks.items() if v == "COMPLETED"]
-    in_progress = [k for k, v in tasks.items() if v == "IN PROGRESS"]
-    planned = [k for k, v in tasks.items() if v == "PLANNED"]
-    blocked = [k for k, v in tasks.items() if v == "BLOCKED"]
+    verified = [k for k, v in tasks.items() if v == "VERIFIED"]
+    implemented = [k for k, v in tasks.items() if v == "IMPLEMENTED"]
+    pending = [k for k, v in tasks.items() if v == "PENDING TRAINING MACHINE"]
+    planned = [k for k, v in tasks.items() if v in ["PLANNED", "BLOCKED"]]
     
     with col1:
-        st.success(f"**COMPLETED ({len(completed)})**")
-        for t in completed: st.write(f"- {t}")
+        st.success(f"**VERIFIED / IMPLEMENTED ({len(verified) + len(implemented)})**")
+        for t in verified: st.write(f"- {t} *(Verified)*")
+        for t in implemented: st.write(f"- {t} *(Implemented)*")
         
     with col2:
-        st.info(f"**IN PROGRESS ({len(in_progress)})**")
-        for t in in_progress: st.write(f"- {t}")
+        st.info(f"**PENDING TRAINING ({len(pending)})**")
+        for t in pending: st.write(f"- {t}")
         
     with col3:
-        st.warning(f"**PLANNED / BLOCKED ({len(planned) + len(blocked)})**")
-        for t in planned: st.write(f"- {t} (Planned)")
-        for t in blocked: st.write(f"- {t} (Blocked)")
+        st.warning(f"**PLANNED / BLOCKED ({len(planned)})**")
+        for t in planned: st.write(f"- {t}")
