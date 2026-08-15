@@ -10,14 +10,45 @@ from src.utils import get_logger
 
 logger = get_logger()
 
+# -------------------------------------------------------------
+# Dynamic GPU Auto-Detection
+# -------------------------------------------------------------
+def is_gpu_available():
+    """Check if NVIDIA CUDA GPU is available for acceleration."""
+    try:
+        import xgboost as xgb
+        # Quick test on 2 samples
+        test_model = xgb.XGBClassifier(device='cuda', tree_method='hist', n_estimators=1)
+        test_model.fit(np.zeros((2, 2)), np.array([0, 1]))
+        return True
+    except Exception:
+        pass
+    
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return True
+    except Exception:
+        pass
+        
+    return False
+
+GPU_AVAILABLE = is_gpu_available()
+if GPU_AVAILABLE:
+    logger.info("⚡ NVIDIA CUDA GPU detected! Enabling hardware acceleration.")
+else:
+    logger.info("💻 GPU not detected/available. Running on multi-core CPU.")
+
 try:
     import torch
     import torch.nn as nn
     import torch.optim as optim
     from torch.utils.data import DataLoader, TensorDataset
     TORCH_AVAILABLE = True
+    TORCH_DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 except ImportError:
     TORCH_AVAILABLE = False
+    TORCH_DEVICE = "cpu"
 
 # High-Performance PyTorch Tabular Neural Network with Residual connections
 if TORCH_AVAILABLE:
@@ -64,7 +95,7 @@ if TORCH_AVAILABLE:
 def get_model(model_name, params=None):
     """
     Factory function to instantiate models with Grand Master hyperparameters.
-    Uses unweighted loss (scale_pos_weight=1.0) to output true calibrated posteriors for Multi Score.
+    Dynamically routes compute to GPU if present, else multi-threaded CPU.
     """
     p = params or {}
     
@@ -79,11 +110,19 @@ def get_model(model_name, params=None):
             'min_child_samples': 30,
             'reg_alpha': 0.3,
             'reg_lambda': 2.0,
-            'scale_pos_weight': 1.0,  # Pure calibrated posterior
+            'scale_pos_weight': 1.0,
             'random_state': SEED,
             'n_jobs': -1,
             'verbose': -1
         }
+        if GPU_AVAILABLE:
+            try:
+                # Test if OpenCL/CUDA lightgbm is enabled
+                test_lgb = LGBMClassifier(device='gpu', n_estimators=1, verbose=-1)
+                test_lgb.fit(np.zeros((2, 2)), np.array([0, 1]))
+                default_params['device'] = 'gpu'
+            except Exception:
+                default_params['device'] = 'cpu'
         default_params.update(p)
         return LGBMClassifier(**default_params)
 
@@ -91,7 +130,7 @@ def get_model(model_name, params=None):
         default_params = {
             'boosting_type': 'dart',
             'n_estimators': 1200,
-            'learning_rate': 0.03,
+            'learning_rate': 0.025,
             'num_leaves': 35,
             'max_depth': 6,
             'subsample': 0.85,
@@ -103,6 +142,13 @@ def get_model(model_name, params=None):
             'n_jobs': -1,
             'verbose': -1
         }
+        if GPU_AVAILABLE:
+            try:
+                test_lgb = LGBMClassifier(device='gpu', n_estimators=1, verbose=-1)
+                test_lgb.fit(np.zeros((2, 2)), np.array([0, 1]))
+                default_params['device'] = 'gpu'
+            except Exception:
+                default_params['device'] = 'cpu'
         default_params.update(p)
         return LGBMClassifier(**default_params)
         
@@ -120,7 +166,8 @@ def get_model(model_name, params=None):
             'random_state': SEED,
             'n_jobs': -1,
             'eval_metric': 'logloss',
-            'tree_method': 'hist'
+            'tree_method': 'hist',
+            'device': 'cuda' if GPU_AVAILABLE else 'cpu'  # GPU Acceleration
         }
         default_params.update(p)
         return XGBClassifier(**default_params)
@@ -184,7 +231,7 @@ def get_model(model_name, params=None):
 
 
 class PyTorchMLPWrapper:
-    """Scikit-learn compatible wrapper for PyTorch Tabular Neural Network."""
+    """Scikit-learn compatible wrapper for PyTorch Tabular Neural Network with auto GPU."""
     def __init__(self, params=None):
         self.params = params or {}
         self.epochs = self.params.get('epochs', 25)
@@ -192,6 +239,7 @@ class PyTorchMLPWrapper:
         self.batch_size = self.params.get('batch_size', 256)
         self.hidden_dim = self.params.get('hidden_dim', 128)
         self.dropout = self.params.get('dropout', 0.2)
+        self.device = TORCH_DEVICE
         self.scaler = StandardScaler()
         self.model = None
         
@@ -203,13 +251,15 @@ class PyTorchMLPWrapper:
         dataset = TensorDataset(X_tensor, y_tensor)
         dataloader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
         
-        self.model = TabularResMLP(input_dim=X.shape[1], hidden_dim=self.hidden_dim, dropout=self.dropout)
+        self.model = TabularResMLP(input_dim=X.shape[1], hidden_dim=self.hidden_dim, dropout=self.dropout).to(self.device)
         optimizer = optim.AdamW(self.model.parameters(), lr=self.lr, weight_decay=1e-4)
         criterion = nn.BCELoss()
         
         self.model.train()
         for epoch in range(self.epochs):
             for batch_x, batch_y in dataloader:
+                batch_x = batch_x.to(self.device)
+                batch_y = batch_y.to(self.device)
                 optimizer.zero_grad()
                 out = self.model(batch_x)
                 loss = criterion(out, batch_y)
@@ -219,8 +269,8 @@ class PyTorchMLPWrapper:
 
     def predict_proba(self, X):
         X_scaled = self.scaler.transform(np.nan_to_num(X, nan=0.0))
-        X_tensor = torch.tensor(X_scaled, dtype=torch.float32)
+        X_tensor = torch.tensor(X_scaled, dtype=torch.float32).to(self.device)
         self.model.eval()
         with torch.no_grad():
-            probs = self.model(X_tensor).numpy()
+            probs = self.model(X_tensor).cpu().numpy()
         return np.column_stack([1 - probs, probs])
