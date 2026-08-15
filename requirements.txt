@@ -10,3 +10,9 @@ matplotlib
 seaborn
 tqdm
 joblib
+torch>=2.0.0
+fastapi
+uvicorn
+streamlit
+plotly
+pytest

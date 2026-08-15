@@ -1,0 +1,83 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Zindi Experiment Run Schema",
+  "type": "object",
+  "required": [
+    "experiment_id",
+    "timestamp",
+    "model",
+    "status"
+  ],
+  "properties": {
+    "experiment_id": {
+      "type": "string",
+      "description": "Unique identifier for the experiment run."
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the experiment started."
+    },
+    "git_commit": {
+      "type": ["string", "null"],
+      "description": "Current git commit hash, if available."
+    },
+    "model": {
+      "type": "string",
+      "description": "The name of the primary model architecture (e.g. 'lightgbm', 'ensemble')."
+    },
+    "model_version": {
+      "type": ["string", "null"],
+      "description": "Semantic versioning or tags for the model."
+    },
+    "feature_version": {
+      "type": ["string", "null"],
+      "description": "Identifier for the feature engineering pipeline used."
+    },
+    "feature_count": {
+      "type": ["integer", "null"],
+      "description": "Number of features passed to the model."
+    },
+    "cv_folds": {
+      "type": ["integer", "null"],
+      "description": "Number of folds used in cross validation."
+    },
+    "hyperparameters": {
+      "type": "object",
+      "description": "Key-value pairs of model hyperparameters."
+    },
+    "training_metrics": {
+      "type": "object",
+      "description": "Metrics evaluated on the training subset."
+    },
+    "validation_metrics": {
+      "type": "object",
+      "description": "Metrics evaluated on the validation (OOF) subset."
+    },
+    "oof_metrics": {
+      "type": "object",
+      "description": "Overall out-of-fold metrics across all CV folds."
+    },
+    "generalization_gap": {
+      "type": ["object", "null"],
+      "description": "Diagnostic gap between training and validation metrics."
+    },
+    "ensemble_information": {
+      "type": ["object", "null"],
+      "description": "Weights and base models if this is an ensemble run."
+    },
+    "training_time": {
+      "type": ["number", "null"],
+      "description": "Total training time in seconds."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["running", "completed", "failed"],
+      "description": "Execution status of the experiment."
+    },
+    "notes": {
+      "type": ["string", "null"],
+      "description": "Human-readable notes or tags."
+    }
+  }
+}
