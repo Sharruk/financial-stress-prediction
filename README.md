@@ -205,24 +205,51 @@ Docker fully containerizes the web/API layer, running the dashboard safely separ
 This repository is designed to separate heavy ML training (on Kaggle) from the local analytics dashboard (via Docker). 
 The local Streamlit dashboard only requires lightweight metadata, meaning you do **not** need to sync heavy model weights locally.
 
-### 1. Kaggle GPU Training Workflow
+### 1. Kaggle One-Command Workflow
+
+You can orchestrate the entire end-to-end Kaggle training workflow using a single command wrapper:
 
 1. Open a Kaggle Notebook and set **Accelerator → GPU T4 × 2**.
-2. Clone the repository and install requirements:
+2. Clone the desired branch:
    ```bash
-   git clone -b nat <your-repo-url>
+   git clone -b nat git@github.com:Sharruk/financial-stress-prediction.git
+   ```
+3. Enter the repository:
+   ```bash
    cd financial-stress-prediction
-   pip install -r requirements.txt
    ```
-3. Run the GPU & Pipeline Smoke Test:
+4. Run the one-command orchestration script:
    ```bash
-   python train.py --smoke-test
+   python kaggle_run.py
    ```
-4. Run the 5-Fold CatBoost GPU Baseline:
-   ```bash
-   python train.py --models catboost --folds 5 --gpu --devices 0:1
-   ```
-   *(For single GPU like P100/T4x1, simply run `python train.py --models catboost --folds 5 --gpu`)*
+
+> [!NOTE]
+> Kaggle SSH authentication (adding your private SSH key in Kaggle Secrets / `.ssh/id_rsa`) must already be configured to clone via SSH and to use `--push-results`.
+
+#### Optional Execution Flags
+
+- **Smoke test only** (verify environment and hardware in seconds):
+  ```bash
+  python kaggle_run.py --smoke-only
+  ```
+- **Custom GPU configuration & folds**:
+  ```bash
+  python kaggle_run.py --gpu --devices 0:1 --folds 5
+  ```
+- **Force CPU execution**:
+  ```bash
+  python kaggle_run.py --cpu
+  ```
+- **Automatically commit & push experiment records and submission artifacts**:
+  ```bash
+  python kaggle_run.py --push-results
+  ```
+
+#### Underlying Pipeline Commands (Manual Workflow)
+
+Under the hood, `kaggle_run.py` automatically executes and verifies:
+1. Smoke test: `python train.py --smoke-test`
+2. Full 5-fold training: `python train.py --models catboost --folds 5 --gpu --devices 0:1`
 
 ### 2. Download Artifacts to Local Machine
 
