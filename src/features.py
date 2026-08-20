@@ -1,9 +1,10 @@
 import numpy as np
 import pandas as pd
+from sklearn.cluster import KMeans
 from src.config import (
     CATEGORICAL_COLS, PROFILE_NUM_COLS, BALANCE_COLS,
     TRANSACTION_TYPES, INFLOW_TYPES, OUTFLOW_TYPES,
-    COUNTERPARTY_SUFFIX_MAP, MONTHS
+    COUNTERPARTY_SUFFIX_MAP, MONTHS, SEED
 )
 from src.utils import get_logger
 
@@ -34,13 +35,25 @@ def compute_shannon_entropy(matrix):
     entropy = -np.sum(p * np.log(p_safe + 1e-9), axis=1)
     return entropy
 
+def compute_gini(array_2d):
+    """
+    Computes Gini coefficient across columns for each row (inequality metric).
+    array_2d shape: (N, C)
+    """
+    sorted_arr = np.sort(np.maximum(0, array_2d), axis=1)
+    n = sorted_arr.shape[1]
+    index = np.arange(1, n + 1)
+    sums = np.sum(sorted_arr, axis=1) + 1e-7
+    gini = (2.0 * np.sum(index * sorted_arr, axis=1) / (n * sums)) - (n + 1.0) / n
+    return np.clip(gini, 0.0, 1.0)
+
 def engineer_features(data_df):
     """
-    Grand Master v5 Feature Engineering Pipeline (~480+ high-signal features).
-    Extracts panic indicators, multi-lag velocity, single-day shock drains,
-    P2P net reliance, financial personas, and liquidity strain signals.
+    Grand Master v6 Ultimate Feature Engineering Pipeline (~600+ high-signal features).
+    Extracts financial physics, exponential moving averages (EMA), second-order acceleration,
+    liquidity exhaustion countdown, behavioral personas, and multi-lag panic indicators.
     """
-    logger.info("Starting Grand Master v5 feature engineering pipeline...")
+    logger.info("Starting Grand Master v6 feature engineering pipeline...")
     df = data_df.copy()
     new_cols = {}
     
@@ -101,9 +114,10 @@ def engineer_features(data_df):
         new_cols[f'm1_bal_pct_in_{group_col}'] = df.groupby(col_to_group)['m1_daily_avg_bal'].rank(pct=True).astype(np.float32)
 
     # -------------------------------------------------------------
-    # 2. Balance Trajectory, Multi-Month Lags, Volatility & Strain
+    # 2. Balance Trajectory, Physics Dynamics & Exhaustion Projections
     # -------------------------------------------------------------
-    logger.info("Computing balance multi-lags, rolling stats & drawdowns...")
+    logger.info("Computing balance physics, EMA, acceleration & exhaustion metrics...")
+    # Matrix ordered M6 (col 0) to M1 (col 5)
     bal_matrix = df[BALANCE_COLS[::-1]].values.astype(np.float32)
     
     new_cols['bal_slope'] = compute_linear_slope(bal_matrix)
@@ -113,6 +127,22 @@ def engineer_features(data_df):
     new_cols['bal_max'] = np.max(bal_matrix, axis=1)
     new_cols['bal_cv'] = new_cols['bal_std'] / (new_cols['bal_mean'] + 1.0)
     
+    # Exponential Moving Averages (EMA): Weights decay into the past
+    ema_weights_half = np.array([0.03125, 0.0625, 0.125, 0.25, 0.5, 1.0], dtype=np.float32)
+    ema_weights_half /= ema_weights_half.sum()
+    new_cols['bal_ema_recent'] = np.dot(bal_matrix, ema_weights_half)
+    
+    # Cumulative Area Under the Balance Curve (Trapezoidal Integration)
+    new_cols['bal_cumulative_area'] = np.sum(bal_matrix, axis=1)
+    new_cols['bal_ema_vs_mean_ratio'] = new_cols['bal_ema_recent'] / (new_cols['bal_mean'] + 1.0)
+    
+    # Second-order acceleration & jerk across balance sequence
+    for i in range(1, 5):
+        m_curr = df[f'm{i}_daily_avg_bal']
+        m_prev = df[f'm{i+1}_daily_avg_bal']
+        m_prev2 = df[f'm{i+2}_daily_avg_bal']
+        new_cols[f'bal_accel_m{i}'] = (m_curr - m_prev) - (m_prev - m_prev2)
+
     # Balance Multi-Month Lags and Differences (M1-M2, M2-M3, M3-M4, M4-M5, M5-M6)
     for i in range(1, 6):
         curr_b = df[f'm{i}_daily_avg_bal']
@@ -135,14 +165,14 @@ def engineer_features(data_df):
     new_cols['bal_m1_vs_m6_diff'] = df['m1_daily_avg_bal'] - df['m6_daily_avg_bal']
     new_cols['bal_recent_vs_hist_ratio'] = (df['m1_daily_avg_bal'] + df['m2_daily_avg_bal']) / (2.0 * (new_cols['bal_mean_m4_m6'] + 1.0))
     
-    # Acceleration / 2nd derivative: (M1 - M2) - (M2 - M3)
-    new_cols['bal_acceleration'] = new_cols['bal_diff_m1_m2'] - new_cols['bal_diff_m2_m3']
-    
     # Proximity to 6-month historical minimum balance (Rock-Bottom score)
     bal_range = new_cols['bal_max'] - new_cols['bal_min'] + 1e-4
     new_cols['bal_rock_bottom_idx'] = (df['m1_daily_avg_bal'] - new_cols['bal_min']) / bal_range
     new_cols['bal_is_all_time_low'] = (df['m1_daily_avg_bal'] <= (new_cols['bal_min'] + 1.0)).astype(np.float32)
     new_cols['bal_range_dispersion'] = (new_cols['bal_max'] - new_cols['bal_min']) / (new_cols['bal_mean'] + 1.0)
+    
+    # Gini coefficient of balances (spending / saving volatility)
+    new_cols['bal_gini'] = compute_gini(bal_matrix)
     
     # Consecutive month-over-month balance drops count (0 to 5)
     bal_drops = sum((df[f'm{i}_daily_avg_bal'] < df[f'm{i+1}_daily_avg_bal']).astype(int) for i in range(1, 6))
@@ -196,11 +226,14 @@ def engineer_features(data_df):
                    (df[f'{m_str}_paybill_total_value'] if f'{m_str}_paybill_total_value' in df.columns else 0)
         new_cols[f'{m_str}_emergency_vs_commercial_ratio'] = emerg_val / (comm_val + 1.0)
 
-    # Multi-month inflow/outflow velocity differences
+    # Multi-month inflow/outflow velocity differences and accelerations
     for i in range(1, 6):
         new_cols[f'inflow_diff_m{i}_m{i+1}'] = m_inflows[i-1] - m_inflows[i]
         new_cols[f'outflow_diff_m{i}_m{i+1}'] = m_outflows[i-1] - m_outflows[i]
         new_cols[f'net_cashflow_diff_m{i}_m{i+1}'] = m_nets[i-1] - m_nets[i]
+
+    for i in range(1, 5):
+        new_cols[f'net_accel_m{i}'] = new_cols[f'net_cashflow_diff_m{i}_m{i+1}'] - new_cols[f'net_cashflow_diff_m{i+1}_m{i+2}']
 
     # Inflow Collapse Index: M1 Inflow vs 6-Month Inflow Mean
     inflow_matrix = np.column_stack([m_inflows[5-i] for i in range(6)]).astype(np.float32)
@@ -213,6 +246,11 @@ def engineer_features(data_df):
     m1_highest_any = np.maximum.reduce([df[f'm1_{t}_highest_amount'].values for t in TRANSACTION_TYPES if f'm1_{t}_highest_amount' in df.columns])
     new_cols['m1_single_shock_drain_ratio'] = m1_highest_any / (df['m1_daily_avg_bal'].values + 1.0)
     new_cols['m1_single_shock_wiped_account'] = (m1_highest_any >= df['m1_daily_avg_bal'].values).astype(np.float32)
+
+    # Liquidity Exhaustion Days Countdown (Days until balance reaches 0)
+    m1_net_deficit = np.maximum(0.0, -new_cols['m1_net_cashflow'])
+    new_cols['days_to_zero_balance'] = df['m1_daily_avg_bal'].values / ((m1_net_deficit / 30.0) + 1.0)
+    new_cols['exhaustion_under_30d_flag'] = (new_cols['days_to_zero_balance'] <= 30.0).astype(np.float32)
 
     # Consecutive month-over-month Degradation Streaks (Balance down AND Deficit)
     degrade_streaks = sum(
@@ -291,6 +329,9 @@ def engineer_features(data_df):
         new_cols[f'{t}_val_slope'] = compute_linear_slope(val_mat)
         new_cols[f'{t}_vol_slope'] = compute_linear_slope(vol_mat)
         
+        # Gini of transaction amounts for this channel
+        new_cols[f'{t}_val_gini'] = compute_gini(val_mat)
+        
         # Emergency Spike Ratio: Largest transaction in M1 vs total transaction value
         new_cols[f'{t}_m1_highest_to_total_val'] = df[f'm1_{t}_highest_amount'] / (df[f'm1_{t}_total_value'] + 1.0)
         
@@ -344,17 +385,44 @@ def engineer_features(data_df):
         (new_cols['total_deficit_months_6m'] * 0.3) +
         (new_cols['m1_outflow_to_bal_ratio'] * 0.2) +
         (new_cols['total_zero_activity_m1'] * 0.25) +
-        (new_cols['inflow_collapse_flag'] * 0.2)
+        (new_cols['inflow_collapse_flag'] * 0.2) +
+        (new_cols['exhaustion_under_30d_flag'] * 0.2)
     )
     new_cols['composite_stress_index'] = stress_idx
     
-    # Combine new features dataframe with original dataframe
+    # Combine engineered features
     new_features_df = pd.DataFrame(new_cols, index=df.index)
     df = pd.concat([df, new_features_df], axis=1)
+    
+    # -------------------------------------------------------------
+    # 8. Unsupervised Financial Personas (K-Means Clustering)
+    # -------------------------------------------------------------
+    logger.info("Computing unsupervised financial behavioral personas (K-Means)...")
+    cluster_features = [
+        'arpu', 'age', 'x_90_d_activity_rate', 'bal_mean', 'bal_slope',
+        'm1_inflow_total', 'm1_outflow_total', 'cash_burn_rate_m1',
+        'composite_stress_index', 'total_deficit_months_6m'
+    ]
+    sub_mat = np.nan_to_num(df[cluster_features].values, nan=0.0)
+    sub_mean = np.mean(sub_mat, axis=0, keepdims=True)
+    sub_std = np.std(sub_mat, axis=0, keepdims=True) + 1e-4
+    sub_norm = (sub_mat - sub_mean) / sub_std
+    
+    kmeans = KMeans(n_clusters=8, random_state=SEED, n_init=5)
+    cluster_labels = kmeans.fit_predict(sub_norm)
+    cluster_distances = kmeans.transform(sub_norm)
+    
+    cluster_cols = {}
+    cluster_cols['financial_persona_cluster'] = cluster_labels.astype(str)
+    for c_i in range(8):
+        cluster_cols[f'dist_to_persona_cluster_{c_i}'] = cluster_distances[:, c_i].astype(np.float32)
+        
+    cluster_df = pd.DataFrame(cluster_cols, index=df.index)
+    df = pd.concat([df, cluster_df], axis=1)
     
     # Clean infs/NaNs if any were created during divisions
     num_cols = df.select_dtypes(include=[np.number]).columns
     df[num_cols] = df[num_cols].replace([np.inf, -np.inf], np.nan).fillna(0.0)
     
-    logger.info(f"Grand Master v5 Feature engineering completed! Total columns: {df.shape[1]}")
+    logger.info(f"Grand Master v6 Feature engineering completed! Total columns: {df.shape[1]}")
     return df

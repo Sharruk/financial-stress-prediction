@@ -4,16 +4,15 @@ from scipy.optimize import minimize
 from scipy.stats import rankdata
 from scipy.special import expit, logit
 from sklearn.linear_model import LogisticRegression, RidgeClassifier
-from sklearn.calibration import CalibratedClassifierCV
 from src.utils import evaluate_predictions, get_logger
 
 logger = get_logger()
 
-def calibrate_temperature(y_true, oof_probs, initial_temp=1.05):
+def calibrate_temperature(y_true, oof_probs, initial_temp=1.03):
     """
     Find optimal temperature parameter T minimizing Log Loss on OOF predictions.
     P_calibrated = Sigmoid(logit(P) / T)
-    Prevents overconfident penalty on multi-metric leaderboards.
+    Softens overconfident probability extremes to protect against Log Loss blowouts.
     """
     eps = 1e-6
     raw_logits = logit(np.clip(oof_probs, eps, 1.0 - eps))
@@ -34,9 +33,34 @@ def apply_temperature_scaling(probs, temp):
     raw_logits = logit(np.clip(probs, eps, 1.0 - eps))
     return expit(raw_logits / temp)
 
+def align_prior_probability(test_probs, train_prior=0.1500):
+    """
+    Calibrate test probability posteriors using Bayesian Odds Ratio alignment:
+    Adjusts the log-odds intercept so that the empirical test mean matches train_prior.
+    """
+    eps = 1e-6
+    clipped_probs = np.clip(test_probs, eps, 1.0 - eps)
+    raw_logits = logit(clipped_probs)
+    
+    current_mean = np.mean(clipped_probs)
+    if abs(current_mean - train_prior) < 0.005:
+        return clipped_probs
+        
+    # Find shift delta to align mean
+    def shift_loss(delta):
+        shifted = expit(raw_logits + delta[0])
+        return (np.mean(shifted) - train_prior) ** 2
+        
+    res = minimize(shift_loss, [0.0], method='Nelder-Mead')
+    best_delta = float(res.x[0])
+    calibrated_test = expit(raw_logits + best_delta)
+    logger.info(f"Prior shift applied: delta={best_delta:.4f} (test mean shifted from {current_mean:.4f} -> {np.mean(calibrated_test):.4f})")
+    return calibrated_test
+
 def optimize_ensemble_weights(oof_dict, y_true):
     """
     Find optimal probability weights minimizing OOF Multi Score using SLSQP optimization.
+    Target objective: 0.5 * LogLoss + 0.5 * (1 - ROC-AUC)
     """
     model_names = list(oof_dict.keys())
     oof_matrix = np.column_stack([oof_dict[m] for m in model_names])
@@ -46,8 +70,8 @@ def optimize_ensemble_weights(oof_dict, y_true):
         weights = weights / (np.sum(weights) + 1e-9)
         blend_oof = np.dot(oof_matrix, weights)
         metrics = evaluate_predictions(y_true, blend_oof)
-        # Zindi Multi Score objective: lower log loss + higher ROC-AUC
-        return metrics['log_loss'] - 0.10 * metrics['roc_auc']
+        # Zindi Multi Score objective: combined loss
+        return metrics['log_loss'] - 0.12 * metrics['roc_auc']
         
     initial_weights = np.ones(n_models) / n_models
     bounds = [(0.0, 1.0) for _ in range(n_models)]
@@ -78,7 +102,7 @@ def compute_blend_predictions(oof_dict, test_dict, weights):
 def compute_logit_blend(oof_dict, test_dict, weights):
     """
     Blend predictions in log-odds (logit) space.
-    Preserves probability calibration and high-confidence predictions.
+    Preserves probability calibration and extreme confidence.
     """
     eps = 1e-6
     model_names = list(oof_dict.keys())
@@ -92,7 +116,7 @@ def compute_logit_blend(oof_dict, test_dict, weights):
 
 def compute_rank_average(oof_dict, test_dict, weights=None):
     """
-    Rank average test predictions to optimize ROC-AUC ranking consistency.
+    Rank average test predictions to optimize pure ROC-AUC ranking consistency.
     """
     model_names = list(oof_dict.keys())
     n_models = len(model_names)

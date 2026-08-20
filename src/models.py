@@ -39,6 +39,12 @@ else:
     logger.info("💻 GPU not detected/available. Running on multi-core CPU.")
 
 try:
+    import catboost as cb
+    CATBOOST_AVAILABLE = True
+except ImportError:
+    CATBOOST_AVAILABLE = False
+
+try:
     import torch
     import torch.nn as nn
     import torch.optim as optim
@@ -52,7 +58,7 @@ except ImportError:
 # High-Performance PyTorch Tabular Neural Network with Residual connections
 if TORCH_AVAILABLE:
     class TabularResMLP(nn.Module):
-        def __init__(self, input_dim, hidden_dim=160, dropout=0.2):
+        def __init__(self, input_dim, hidden_dim=192, dropout=0.2):
             super().__init__()
             self.input_layer = nn.Sequential(
                 nn.Linear(input_dim, hidden_dim),
@@ -93,7 +99,7 @@ if TORCH_AVAILABLE:
 
 def get_model(model_name, params=None):
     """
-    Factory function to instantiate models with Grand Master v4 hyperparameters.
+    Factory function to instantiate models with Grand Master v6 hyperparameters.
     """
     p = params or {}
     
@@ -101,13 +107,13 @@ def get_model(model_name, params=None):
         default_params = {
             'n_estimators': 1800,
             'learning_rate': 0.015,
-            'num_leaves': 55,
+            'num_leaves': 63,
             'max_depth': 8,
             'subsample': 0.8,
             'colsample_bytree': 0.6,
             'min_child_samples': 25,
-            'reg_alpha': 0.4,
-            'reg_lambda': 3.0,
+            'reg_alpha': 0.5,
+            'reg_lambda': 4.0,
             'scale_pos_weight': 1.0,
             'random_state': SEED,
             'n_jobs': -1,
@@ -134,6 +140,24 @@ def get_model(model_name, params=None):
         }
         default_params.update(p)
         return LGBMClassifier(**default_params)
+
+    elif model_name.lower() == "lightgbm_goss":
+        default_params = {
+            'boosting_type': 'goss',
+            'n_estimators': 1400,
+            'learning_rate': 0.018,
+            'num_leaves': 45,
+            'max_depth': 7,
+            'colsample_bytree': 0.6,
+            'reg_alpha': 0.5,
+            'reg_lambda': 4.0,
+            'scale_pos_weight': 1.0,
+            'random_state': SEED + 13,
+            'n_jobs': -1,
+            'verbose': -1
+        }
+        default_params.update(p)
+        return LGBMClassifier(**default_params)
         
     elif model_name.lower() == "xgboost":
         default_params = {
@@ -143,8 +167,8 @@ def get_model(model_name, params=None):
             'subsample': 0.8,
             'colsample_bytree': 0.6,
             'min_child_weight': 5,
-            'reg_alpha': 0.4,
-            'reg_lambda': 4.0,
+            'reg_alpha': 0.5,
+            'reg_lambda': 5.0,
             'scale_pos_weight': 1.0,
             'random_state': SEED,
             'n_jobs': -1,
@@ -154,6 +178,22 @@ def get_model(model_name, params=None):
         }
         default_params.update(p)
         return XGBClassifier(**default_params)
+
+    elif model_name.lower() == "catboost":
+        if not CATBOOST_AVAILABLE:
+            raise ImportError("CatBoost is not available.")
+        default_params = {
+            'iterations': 1800,
+            'learning_rate': 0.018,
+            'depth': 6,
+            'l2_leaf_reg': 5.0,
+            'eval_metric': 'Logloss',
+            'random_seed': SEED,
+            'verbose': 0,
+            'task_type': 'GPU' if GPU_AVAILABLE else 'CPU'
+        }
+        default_params.update(p)
+        return cb.CatBoostClassifier(**default_params)
 
     elif model_name.lower() == "hist_gbm":
         default_params = {
@@ -170,7 +210,7 @@ def get_model(model_name, params=None):
         
     elif model_name.lower() == "extra_trees":
         default_params = {
-            'n_estimators': 500,
+            'n_estimators': 600,
             'max_depth': 18,
             'min_samples_split': 6,
             'min_samples_leaf': 2,
@@ -183,7 +223,7 @@ def get_model(model_name, params=None):
 
     elif model_name.lower() == "random_forest":
         default_params = {
-            'n_estimators': 500,
+            'n_estimators': 600,
             'max_depth': 16,
             'min_samples_split': 8,
             'min_samples_leaf': 3,
@@ -220,7 +260,7 @@ class PyTorchMLPWrapper:
         self.epochs = self.params.get('epochs', 25)
         self.lr = self.params.get('lr', 1e-3)
         self.batch_size = self.params.get('batch_size', 256)
-        self.hidden_dim = self.params.get('hidden_dim', 160)
+        self.hidden_dim = self.params.get('hidden_dim', 192)
         self.dropout = self.params.get('dropout', 0.2)
         self.device = TORCH_DEVICE
         self.scaler = StandardScaler()

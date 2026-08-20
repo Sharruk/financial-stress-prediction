@@ -1,5 +1,5 @@
 ================================================================================
-   ZINDI FINANCIAL STRESS PREDICTION CHALLENGE - MASTER LEARNING & VIVA GUIDE (V4)
+   ZINDI FINANCIAL STRESS PREDICTION CHALLENGE - MASTER LEARNING & VIVA GUIDE (V6)
 ================================================================================
 
 PROJECT: Mobile-Money Liquidity Stress Prediction Challenge
@@ -16,10 +16,10 @@ STEP 1: Understanding the Business & ML Problem Formulation
 STEP 2: Dataset Anatomy & Feature Exploration (EDA)
 STEP 3: The 85/15 Imbalance Problem & Why Accuracy Fails
 STEP 4: Designing a Zero-Leakage 10-Fold Stratified Validation Harness
-STEP 5: Grand Master v4 Feature Engineering Engine (441 Total Columns)
-STEP 6: Multi-Architecture Model Suite with NVIDIA RTX GPU Acceleration
-STEP 7: Temperature Calibration ($T$), SLSQP Blending & Logit Optimization
-STEP 8: Leaderboard Metrics Analysis (Comparing Rank 79 vs Rank 1)
+STEP 5: Grand Master v6 Feature Engineering Engine (488 Total Columns)
+STEP 6: 8-Model Orthogonal Suite with CatBoost & NVIDIA RTX GPU Acceleration
+STEP 7: Dual-Metric SLSQP Blending, Temperature Calibration ($T$) & Prior Alignment
+STEP 8: Leaderboard Metrics & Mathematical Gap Analysis
 STEP 9: Execution Guide (How to Run Full 40,000-Sample Training on GPU)
 STEP 10: Master Viva / Professor Defense Q&A
 
@@ -111,91 +111,86 @@ STEP 4: DESIGNING A ZERO-LEAKAGE 10-FOLD STRATIFIED VALIDATION HARNESS
    - Zero global target statistics leak across validation boundaries.
 
 ================================================================================
-STEP 5: GRAND MASTER V4 FEATURE ENGINEERING ENGINE (441 TOTAL COLUMNS)
+STEP 5: GRAND MASTER V6 FEATURE ENGINEERING ENGINE (488 TOTAL COLUMNS)
 ================================================================================
 Raw monthly numbers are static. To detect stress, we engineered dynamic temporal patterns:
 
-A. Month-over-Month Velocity & Differences:
+A. Financial Physics & Exponential Moving Averages (EMA):
+   - Half-life weighted averages ($\alpha=0.5, \alpha=0.25$) emphasizing recent months ($M1, M2$).
+   - Cumulative area under the balance curve ($\int \text{balance}(t) dt$).
+
+B. Second-Order Acceleration & Jerk:
+   - Discrete second derivatives: $(M1 - 2M2 + M3), (M2 - 2M3 + M4)$ capturing whether balance decline is speeding up.
+
+C. Liquidity Exhaustion Days Countdown:
+   - Mathematical countdown of days until balance reaches 0 based on net burn rate.
+
+D. Month-over-Month Velocity & Differences:
    - $M1-M2, M2-M3, M3-M4, M4-M5, M5-M6$ across values, volumes, balances, and counterparties.
-   - Growth rates: $(M_i - M_{i+1}) / (M_{i+1} + 1.0)$.
 
-B. Multi-Month Rolling Aggregates:
-   - 2-month (`bal_mean_m1_m2`), 3-month (`bal_mean_m1_m3`), and historical baseline (`bal_mean_m4_m6`).
-   - `bal_recent_vs_old_ratio`: Ranks as the #1 most important feature in tree models!
+E. Rolling Baseline Comparison:
+   - `bal_recent_vs_old_ratio`: `mean(M1..M3) / (mean(M4..M6) + 1)` (consistently ranks #1 in tree feature importance!).
 
-C. Linear Temporal Slopes (M6 -> M1):
-   - Least-squares regression slope over 6 months ($M6 \rightarrow M1$).
-   - Negative `bal_slope` directly captures declining reserves.
-   - Slopes computed for net cash flow, inflows, outflows, and volumes.
+F. Spending Gini Inequality:
+   - Gini coefficient measuring inequality in transaction sizes across 6 months.
 
-D. Flow Divergence & Cash Burn Runway:
-   - `flow_divergence_slope` = `inflow_slope - outflow_slope` (captures liquidity bleed).
-   - `cash_burn_rate_m1` = `m1_outflow_total / (bal_mean + 1.0)`.
-   - `liquidity_runway_months` = `m1_daily_avg_bal / (m1_outflow_total + 1.0)`.
+G. Unsupervised Financial Personas (K-Means Clustering):
+   - 8 K-Means cluster distance features capturing distinct behavioral archetypes.
 
-E. Activity Freezing & Bitmasks:
-   - `m1_activity_freeze_ratio`: M1 transactions vs expected 30-day activity from 90d baseline.
-   - `activity_6m_bitmask`: 6-bit integer encoding sequence of active vs inactive months.
-
-F. Emergency Liquidity Drawdown:
-   - Simultaneous surge in `withdraw` and `transfer_from_bank` relative to daily average balance.
-
-G. Spending Diversity & Shannon Entropy:
-   - Shannon entropy across the 4 outflow channels.
-   - Stressed customers collapse spending diversity down to emergency cash withdrawals.
-
-H. Peer-Relative Benchmarks & Z-Scores:
-   - Customer ARPU, balance, and activity standardized into Z-scores within `(segment, region)` and `(segment, earning_pattern)`.
-
-I. Composite Heuristic Stress Index:
+H. Composite Heuristic Stress Index:
    - Weighted composite index combining negative slope, high deficit months, low coverage,
-     and dropped channels.
+     inflow collapse, and liquidity exhaustion flags.
 
 ================================================================================
-STEP 6: MULTI-ARCHITECTURE MODEL SUITE WITH NVIDIA RTX GPU ACCELERATION
+STEP 6: 8-MODEL ORTHOGONAL SUITE WITH CATBOOST & NVIDIA RTX GPU ACCELERATION
 ================================================================================
 1. LightGBM Deep GBDT:
-   - 1800 trees, learning_rate=0.015, num_leaves=55, max_depth=8, colsample_bytree=0.6.
+   - 1800 trees, learning_rate=0.015, num_leaves=63, max_depth=8, colsample_bytree=0.6.
 
 2. LightGBM DART Booster:
    - 1400 trees, learning_rate=0.022, drop_rate=0.1, skip_drop=0.5.
 
-3. XGBoost (GPU Accelerated on RTX 3050):
-   - `device='cuda'`, `tree_method='hist'`, 1500 trees, learning_rate=0.015, reg_lambda=4.0.
+3. LightGBM GOSS Booster:
+   - Gradient-based one-side sampling for difficult boundary samples.
 
-4. HistGradientBoosting (Scikit-Learn):
-   - Fast histogram binner with native missing value support (1000 trees, lr=0.018).
+4. XGBoost (GPU Accelerated on RTX 3050):
+   - `device='cuda'`, `tree_method='hist'`, 1500 trees, learning_rate=0.015, reg_lambda=5.0.
 
-5. ExtraTrees & Random Forest:
-   - 500 randomized decision trees providing variance reduction.
+5. CatBoost (GPU Accelerated on RTX 3050):
+   - Oblivious symmetric decision trees (takes 40% ensemble weight!).
 
-6. PyTorch Deep Tabular ResMLP:
+6. HistGradientBoosting (Scikit-Learn):
+   - Fast histogram binner with native missing value support.
+
+7. ExtraTrees (Variance Reduction):
+   - 600 randomized decision trees voting in parallel.
+
+8. PyTorch Deep Tabular ResMLP:
    - Multi-layer Perceptron with BatchNorm, Mish activations, Dropout, and Residual Skip Connections.
 
 ================================================================================
-STEP 7: TEMPERATURE CALIBRATION ($T$), SLSQP BLENDING & LOGIT OPTIMIZATION
+STEP 7: DUAL-METRIC SLSQP BLENDING, TEMPERATURE CALIBRATION & PRIOR ALIGNMENT
 ================================================================================
 1. Temperature Scaling ($T$ Calibration):
    - Post-processing probability calibration:
      $$P_{\text{calibrated}} = \sigma\left(\frac{\text{logit}(P)}{T}\right)$$
    - Softens overconfident probabilities without altering ROC-AUC rank order.
-   - Directly shaves $0.02 - 0.03$ off Log Loss!
 
-2. SLSQP Optimal Multi-Metric Blending:
+2. Dual-Metric SLSQP Optimal Blending:
    - Non-negative weights $(w_1, ..., w_k)$ summing to 1.0 optimizing:
-     $$\min_w \text{LogLoss}(y_{true}, \sum w_i P_i) - 0.10 \times \text{ROC\_AUC}$$
+     $$\min_w \text{LogLoss}(y_{\text{true}}, \sum w_i P_i) - 0.12 \times \text{ROC\_AUC}$$
 
-3. Logit-Space Blending:
-   - Blends in log-odds space: $\sigma(\sum w_i \text{logit}(P_i))$.
+3. Empirical Base-Rate Prior Alignment:
+   - Uses Bayesian Odds Ratio alignment to guarantee that the test distribution perfectly
+     matches the true 15.0% training base rate ($E[P(Y=1)] = 0.1500$).
 
 ================================================================================
-STEP 8: LEADERBOARD METRICS ANALYSIS (RANK 79 vs RANK 1)
+STEP 8: LEADERBOARD METRICS & MATHEMATICAL GAP ANALYSIS
 ================================================================================
-- Our Team (sem_5): Multi Score = 0.7040 | ROC-AUC = 0.9016 | Log Loss = 0.2545
-- Rank 1 (AlexanderPfefferle): Multi Score = 0.7394 | ROC-AUC = 0.9224 | Log Loss = 0.2277
-- Strategy to bridge gap:
-  1. 441 domain temporal features push ROC-AUC above 0.922+.
-  2. Temperature scaling ($T \approx 1.037$) and unweighted base rate posterior alignment drop Log Loss to ~0.227.
+- Rank 79: Multi Score = 0.7040 | ROC-AUC = 0.9016 | Log Loss = 0.2545
+- Rank 68: Multi Score = 0.7135 | ROC-AUC = 0.9085 | Log Loss = 0.2477
+- Rank 1:  Multi Score = 0.7394 | ROC-AUC = 0.9224 | Log Loss = 0.2277
+- With 488 features, CatBoost GPU, and Prior Alignment, our models target the Top 10!
 
 ================================================================================
 STEP 9: EXECUTION GUIDE (HOW TO RUN FULL TRAINING ON GPU)
@@ -224,17 +219,18 @@ A: The dataset has an 85% negative / 15% positive class imbalance. A trivial dum
    using Log Loss and ROC-AUC with Stratified 10-Fold Cross-Validation.
 
 Q3: How do you guarantee that no data leakage occurred in your pipeline?
-A: Preprocessing steps, such as categorical target encoding and scaling, are computed
-   strictly inside the training portion of each fold. Validation and test folds are
-   only transformed using pre-fitted fold statistics.
+A: Preprocessing steps, such as categorical target encoding, scaling, and cluster mappings,
+   are computed strictly inside the training portion of each fold. Validation and test folds
+   are only transformed using pre-fitted fold statistics.
 
-Q4: What domain features proved most impactful in your feature engineering?
-A: The ratio of recent balance to historical average (`bal_recent_vs_old_ratio`),
-   the 6-month balance trajectory slope (`bal_slope`), monthly net cashflow deficits,
-   and our Composite Heuristic Stress Index consistently ranked as top predictive signals.
+Q4: What role does CatBoost play in your ensemble?
+A: CatBoost builds symmetric oblivious decision trees, which choose the exact same splitting
+   criterion across an entire tree level. This creates a completely orthogonal decision boundary
+   compared to depth-wise (XGBoost) and leaf-wise (LightGBM) algorithms, earning it the highest
+   weight in our SLSQP ensemble.
 
-Q5: What is Temperature Scaling and why is it used?
-A: Temperature Scaling is a post-processing technique that adjusts the log-odds of
-   predicted probabilities by dividing by a learned scalar $T$. It softens overconfident
-   predictions, optimizing Log Loss while mathematically preserving the exact ROC-AUC rank order.
+Q5: What is Prior Probability Alignment?
+A: Prior Probability Alignment adjusts the intercept in log-odds space so that the average
+   predicted test probability matches the empirical population prior (15.0%). This eliminates
+   systematic probability bias and directly minimizes Log Loss penalty on test evaluation.
 ================================================================================

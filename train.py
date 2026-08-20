@@ -21,7 +21,8 @@ from src.ensemble import (
     compute_rank_average,
     train_stacking_meta_learner,
     calibrate_temperature,
-    apply_temperature_scaling
+    apply_temperature_scaling,
+    align_prior_probability
 )
 from src.persistence import (
     prepare_full_features,
@@ -37,12 +38,13 @@ def parse_args():
     parser.add_argument(
         "--models",
         nargs="+",
-        default=["lightgbm", "lightgbm_dart", "xgboost", "hist_gbm", "extra_trees", "pytorch_mlp"],
-        help="List of models to train (lightgbm, lightgbm_dart, xgboost, hist_gbm, extra_trees, random_forest, pytorch_mlp)"
+        default=["lightgbm", "lightgbm_dart", "lightgbm_goss", "xgboost", "catboost", "hist_gbm", "extra_trees", "pytorch_mlp"],
+        help="List of models to train"
     )
     parser.add_argument("--quick", action="store_true", help="Run quick baseline mode with fewer iterations on subsample")
     parser.add_argument("--folds", type=int, default=None, help="Number of cross-validation folds (default: 10 full, 5 quick)")
-    parser.add_argument("--seed", type=int, default=SEED, help="Random seed")
+    parser.add_argument("--seed", type=int, default=SEED, help="Primary random seed")
+    parser.add_argument("--multi-seed", action="store_true", help="Run multi-seed bagging (Seeds 42, 1337, 2026)")
     return parser.parse_args()
 
 def main():
@@ -50,22 +52,22 @@ def main():
     set_seed(args.seed)
 
     n_splits = args.folds if args.folds is not None else (5 if args.quick else N_SPLITS)
+    seeds = [42, 1337, 2026] if args.multi_seed else [args.seed]
 
     logger.info("==========================================================")
-    logger.info("   ZINDI FINANCIAL STRESS PREDICTION - GRAND MASTER V4   ")
-    logger.info(f"   Mode: {'QUICK (10k sample)' if args.quick else 'FULL DATA (40,000 samples)'} | Folds: {n_splits}")
+    logger.info("   ZINDI FINANCIAL STRESS PREDICTION - GRAND MASTER V6   ")
+    logger.info(f"   Mode: {'QUICK (10k sample)' if args.quick else 'FULL DATA (40,000 samples)'} | Folds: {n_splits} | Seeds: {seeds}")
     logger.info("==========================================================")
 
     # 1. Load Data
     train_df, test_df, sample_sub_df = load_raw_data()
 
-    # Quick mode adjustments if requested
     if args.quick:
         logger.info("Quick mode enabled: Subsampling 10,000 train rows for fast baseline verification.")
         train_df = train_df.sample(n=10000, random_state=args.seed).reset_index(drop=True)
 
     # 2. Engineer Features
-    logger.info("Running Grand Master v4 Feature Engineering Pipeline on Train and Test...")
+    logger.info("Running Grand Master v6 Feature Engineering Pipeline on Train and Test...")
     train_fe = engineer_features(train_df)
     test_fe = engineer_features(test_df)
 
@@ -76,10 +78,11 @@ def main():
 
     selected_models = args.models
     if args.quick:
-        # Reduced iterations for fast verification
         lgb_params = {'n_estimators': 150, 'learning_rate': 0.05}
         lgb_dart_params = {'n_estimators': 120, 'learning_rate': 0.05}
+        lgb_goss_params = {'n_estimators': 120, 'learning_rate': 0.05}
         xgb_params = {'n_estimators': 150, 'learning_rate': 0.05}
+        cb_params = {'iterations': 150, 'learning_rate': 0.05}
         hgb_params = {'max_iter': 100, 'learning_rate': 0.05}
         et_params = {'n_estimators': 100}
         rf_params = {'n_estimators': 100}
@@ -87,16 +90,20 @@ def main():
     else:
         lgb_params = {'n_estimators': 1800, 'learning_rate': 0.015}
         lgb_dart_params = {'n_estimators': 1400, 'learning_rate': 0.022}
+        lgb_goss_params = {'n_estimators': 1400, 'learning_rate': 0.018}
         xgb_params = {'n_estimators': 1500, 'learning_rate': 0.015}
+        cb_params = {'iterations': 1800, 'learning_rate': 0.018}
         hgb_params = {'max_iter': 1000, 'learning_rate': 0.018}
-        et_params = {'n_estimators': 500}
-        rf_params = {'n_estimators': 500}
+        et_params = {'n_estimators': 600}
+        rf_params = {'n_estimators': 600}
         mlp_params = {'epochs': 25}
 
     param_map = {
         'lightgbm': lgb_params,
         'lightgbm_dart': lgb_dart_params,
+        'lightgbm_goss': lgb_goss_params,
         'xgboost': xgb_params,
+        'catboost': cb_params,
         'hist_gbm': hgb_params,
         'extra_trees': et_params,
         'random_forest': rf_params,
@@ -104,13 +111,30 @@ def main():
     }
 
     for m_name in selected_models:
-        m_params = param_map.get(m_name, {})
+        m_params = param_map.get(m_name, {}).copy()
         try:
-            results = train_cv_model(m_name, train_fe, test_fe, model_params=m_params, n_splits=n_splits)
-            oof_dict[m_name] = results['oof_probs']
-            test_dict[m_name] = results['test_probs']
+            # Multi-seed bagging per model if requested
+            seed_oofs = []
+            seed_tests = []
+            
+            for s in seeds:
+                s_params = m_params.copy()
+                if m_name in ['lightgbm', 'lightgbm_dart', 'lightgbm_goss', 'xgboost', 'extra_trees', 'random_forest']:
+                    s_params['random_state'] = s
+                elif m_name == 'catboost':
+                    s_params['random_seed'] = s
+                    
+                results = train_cv_model(m_name, train_fe, test_fe, model_params=s_params, n_splits=n_splits)
+                seed_oofs.append(results['oof_probs'])
+                seed_tests.append(results['test_probs'])
 
-            m_metrics = results['oof_metrics']
+            avg_oof = np.mean(seed_oofs, axis=0)
+            avg_test = np.mean(seed_tests, axis=0)
+            
+            oof_dict[m_name] = avg_oof
+            test_dict[m_name] = avg_test
+
+            m_metrics = evaluate_predictions(train_fe[TARGET_COL].values, avg_oof)
             train_metrics = results.get('train_metrics', {})
             from src.utils import calculate_generalization_gap
             gap = calculate_generalization_gap(train_metrics, m_metrics)
@@ -165,6 +189,7 @@ def main():
 
     # 4. Multi-Model Ensembling, Blending & Calibration
     y_true = train_fe[TARGET_COL].values
+    train_prior = float(np.mean(y_true))
     best_test_preds = None
 
     if len(oof_dict) > 1:
@@ -180,6 +205,9 @@ def main():
         opt_temp = calibrate_temperature(y_true, blend_oof)
         calibrated_blend_oof = apply_temperature_scaling(blend_oof, opt_temp)
         calibrated_blend_test = apply_temperature_scaling(blend_test, opt_temp)
+        
+        # Empirical Prior Alignment
+        calibrated_blend_test = align_prior_probability(calibrated_blend_test, train_prior=train_prior)
         calibrated_metrics = evaluate_predictions(y_true, calibrated_blend_oof)
         logger.info(f"==> CALIBRATED BLEND (T={opt_temp:.3f})   | Log Loss: {calibrated_metrics['log_loss']:.5f} | ROC-AUC: {calibrated_metrics['roc_auc']:.5f} <==")
 
@@ -267,8 +295,8 @@ def main():
         "timestamp": run_ts,
         "git_commit": get_git_commit(),
         "model": "ensemble" if selected_strategy != "single_model" else list(test_dict.keys())[0],
-        "model_version": "v4_grandmaster_calibrated",
-        "feature_version": "v4",
+        "model_version": "v6_ultimate_grandmaster",
+        "feature_version": "v6",
         "feature_count": len(train_fe.columns) - 1,
         "cv_folds": n_splits,
         "hyperparameters": {s['Model']: s['_params'] for s in model_summaries},
@@ -282,7 +310,7 @@ def main():
         },
         "training_time": None,
         "status": "completed",
-        "notes": f"Grand Master v4 training run with {n_splits}-fold CV and Temperature Calibration"
+        "notes": f"Grand Master v6 Ultimate training run with {n_splits}-fold CV, CatBoost GPU, LightGBM GOSS, and Prior Calibration"
     }
 
     experiment_record["_base_models"] = [
