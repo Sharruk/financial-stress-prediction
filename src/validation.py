@@ -7,10 +7,12 @@ from src.utils import evaluate_predictions, get_logger
 
 logger = get_logger()
 
+from src.features import fit_fold_unsupervised_personas, transform_fold_unsupervised_personas
+
 def preprocess_fold_features(train_fold, val_fold, test_df, target_col):
     """
-    Fold-aware categorical processing (Target Encoding).
-    Identifies all non-numeric columns dynamically to guarantee 0 leakage.
+    Fold-aware categorical processing (Target Encoding) and KMeans Persona clustering.
+    Fit strictly on train_fold only to guarantee zero validation/test leakage.
     """
     X_tr = train_fold.copy()
     X_val = val_fold.copy()
@@ -20,11 +22,11 @@ def preprocess_fold_features(train_fold, val_fold, test_df, target_col):
     cat_cols = [c for c in X_tr.columns if c not in [ID_COL, target_col] and not pd.api.types.is_numeric_dtype(X_tr[c])]
 
     # Target Encoding for categorical columns fit ONLY on train_fold
-    global_target_mean = train_fold[target_col].mean()
+    global_target_mean = float(train_fold[target_col].mean())
     smooth_weight = 10
 
     for col in cat_cols:
-        # Group stats
+        # Group stats strictly from train_fold
         stats = train_fold.groupby(col)[target_col].agg(['count', 'mean'])
         smooth_te = (stats['count'] * stats['mean'] + smooth_weight * global_target_mean) / (stats['count'] + smooth_weight)
         te_dict = smooth_te.to_dict()
@@ -33,6 +35,12 @@ def preprocess_fold_features(train_fold, val_fold, test_df, target_col):
         X_tr[te_col_name] = X_tr[col].map(te_dict).fillna(global_target_mean).astype(np.float32)
         X_val[te_col_name] = X_val[col].map(te_dict).fillna(global_target_mean).astype(np.float32)
         X_te[te_col_name] = X_te[col].map(te_dict).fillna(global_target_mean).astype(np.float32)
+
+    # Fold-safe Unsupervised KMeans Personas: Fit on train_fold only!
+    kmeans, scaler_params, avail_cols = fit_fold_unsupervised_personas(X_tr, n_clusters=8, seed=SEED)
+    X_tr = transform_fold_unsupervised_personas(X_tr, kmeans, scaler_params, avail_cols)
+    X_val = transform_fold_unsupervised_personas(X_val, kmeans, scaler_params, avail_cols)
+    X_te = transform_fold_unsupervised_personas(X_te, kmeans, scaler_params, avail_cols)
 
     # Keep only numeric columns for model input
     feature_cols = [c for c in X_tr.select_dtypes(include=[np.number]).columns if c not in [ID_COL, target_col]]
@@ -68,7 +76,26 @@ def train_cv_model(model_name, train_df, test_df, model_params=None, n_splits=N_
 
         # Instantiate fresh model
         model = get_model(model_name, params=model_params)
-        model.fit(X_tr, y_tr)
+        
+        # Fit model with validation set for early stopping if supported
+        if model_name.lower() == "catboost":
+            model.fit(X_tr, y_tr, eval_set=(X_val, y_v), early_stopping_rounds=150, verbose=False)
+        elif model_name.lower() in ["lightgbm", "lightgbm_goss"]:
+            try:
+                import lightgbm as lgb
+                model.fit(X_tr, y_tr, eval_set=[(X_val, y_v)], callbacks=[lgb.early_stopping(100, verbose=False)])
+            except Exception:
+                model.fit(X_tr, y_tr)
+        elif model_name.lower() == "lightgbm_dart":
+            # DART booster does not support early stopping due to tree dropouts
+            model.fit(X_tr, y_tr)
+        elif model_name.lower() == "xgboost":
+            try:
+                model.fit(X_tr, y_tr, eval_set=[(X_val, y_v)], verbose=False)
+            except Exception:
+                model.fit(X_tr, y_tr)
+        else:
+            model.fit(X_tr, y_tr)
 
         # Predict training probabilities
         train_pred = model.predict_proba(X_tr)[:, 1]

@@ -200,33 +200,51 @@ Streamlit consumes the API to provide the visual interactive diagnostic dashboar
 ### Step 5 — Docker
 Docker fully containerizes the web/API layer, running the dashboard safely separate from the expensive ML training environment.
 
-## How to Run
+## The Kaggle → Local → Docker Workflow
 
-### A. Run the ML Pipeline (Training Machine)
-On a machine with sufficient computational resources intended for ML training:
+This repository is designed to separate heavy ML training (on Kaggle) from the local analytics dashboard (via Docker). 
+The local Streamlit dashboard only requires lightweight metadata, meaning you do **not** need to sync heavy model weights locally.
 
-1. Install the full ML dependencies:
+### 1. Kaggle GPU Training Workflow
+
+1. Open a Kaggle Notebook and set **Accelerator → GPU T4 × 2**.
+2. Clone the repository and install requirements:
    ```bash
+   git clone -b nat <your-repo-url>
+   cd financial-stress-prediction
    pip install -r requirements.txt
    ```
-2. Place the dataset files into `data/raw/`.
-3. Run the training pipeline:
+3. Run the GPU & Pipeline Smoke Test:
    ```bash
-   python train.py
+   python train.py --smoke-test
    ```
-4. Generate predictions and submissions:
+4. Run the 5-Fold CatBoost GPU Baseline:
    ```bash
-   python predict.py
+   python train.py --models catboost --folds 5 --gpu --devices 0:1
    ```
+   *(For single GPU like P100/T4x1, simply run `python train.py --models catboost --folds 5 --gpu`)*
 
-### B. Start the Web Platform (Development/Local Machine)
-To run the lightweight FastAPI server and Streamlit dashboard using Docker:
+### 2. Download Artifacts to Local Machine
 
-1. Start the containers using Docker Compose:
-   ```bash
-   docker compose up -d --build
-   ```
-2. The FastAPI documentation will be available at `http://localhost:8000/docs`
-3. The Streamlit dashboard will be available at `http://localhost:8501`
+After Kaggle training finishes, you do **NOT** need to download heavy model binaries (`.pkl`, `.pt`) unless you intend to run inference (`predict.py`) locally.
 
-*(Alternatively, run locally by installing `requirements-web.txt` and launching `uvicorn` and `streamlit` manually).*
+For the local dashboard and experiment comparison, **download only the lightweight artifacts:**
+1. The experiment record: `experiments/run_<timestamp>.json`
+2. The submission file (optional): `data/submissions/zindi_stress_sub*.csv`
+
+### 3. Local Dashboard Setup
+
+Once downloaded, place the artifacts in their respective directories in your local repository:
+- `run_<timestamp>.json` → `experiments/`
+- `zindi_stress_sub*.csv` → `data/submissions/`
+
+Then, launch the web layer using Docker:
+
+```bash
+docker compose up --build
+```
+
+- **Streamlit Dashboard:** [http://localhost:8501](http://localhost:8501)
+- **FastAPI Documentation:** [http://localhost:8000/docs](http://localhost:8000/docs)
+
+The Streamlit dashboard will automatically discover the new `experiments/run_<timestamp>.json` files and populate the Model Leaderboard and Metrics pages, allowing you to seamlessly track and compare multiple Kaggle experiments locally!

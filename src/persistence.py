@@ -35,6 +35,8 @@ ENSEMBLE_CONFIG_FILENAME = "ensemble_config.json"
 # 1. Full-data feature preparation (mirrors fold TE from validation.py)
 # ------------------------------------------------------------------
 
+from src.features import fit_fold_unsupervised_personas, transform_fold_unsupervised_personas
+
 def prepare_full_features(train_fe: pd.DataFrame, test_fe: pd.DataFrame):
     """
     Compute target-encoding fit on the ENTIRE training set (no fold split),
@@ -78,6 +80,11 @@ def prepare_full_features(train_fe: pd.DataFrame, test_fe: pd.DataFrame):
         # Persist map so predict.py can apply it without labels
         te_maps[col] = {str(k): float(v) for k, v in te_dict.items()}
         te_maps[col]["__global_mean__"] = global_target_mean
+
+    # Fit KMeans personas on full training set
+    kmeans, scaler_params, avail_cols = fit_fold_unsupervised_personas(X_tr, n_clusters=8, seed=SEED)
+    X_tr = transform_fold_unsupervised_personas(X_tr, kmeans, scaler_params, avail_cols)
+    X_te = transform_fold_unsupervised_personas(X_te, kmeans, scaler_params, avail_cols)
 
     feature_cols = [
         c for c in X_tr.select_dtypes(include=[np.number]).columns

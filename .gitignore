@@ -17,6 +17,10 @@ ENV/
 .vscode/
 .idea/
 
+# Training runtime logs & caches
+catboost_info/
+.pytest_cache/
+
 # Local model training submissions/checkpoints (do not upload large outputs to GitHub)
 data/submissions/zindi_stress_sub_*.csv
 data/submissions/zindi_stress_sub_*.zip

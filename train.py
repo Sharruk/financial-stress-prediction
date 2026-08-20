@@ -38,18 +38,125 @@ def parse_args():
     parser.add_argument(
         "--models",
         nargs="+",
-        default=["lightgbm", "lightgbm_dart", "lightgbm_goss", "xgboost", "catboost", "hist_gbm", "extra_trees", "pytorch_mlp"],
-        help="List of models to train"
+        default=["catboost"],
+        help="List of models to train (default: ['catboost'])"
     )
+    parser.add_argument("--smoke-test", action="store_true", help="Run fast GPU/CPU smoke test to verify pipeline & hardware")
     parser.add_argument("--quick", action="store_true", help="Run quick baseline mode with fewer iterations on subsample")
-    parser.add_argument("--folds", type=int, default=None, help="Number of cross-validation folds (default: 10 full, 5 quick)")
+    parser.add_argument("--folds", type=int, default=None, help="Number of cross-validation folds (default: 5)")
     parser.add_argument("--seed", type=int, default=SEED, help="Primary random seed")
     parser.add_argument("--multi-seed", action="store_true", help="Run multi-seed bagging (Seeds 42, 1337, 2026)")
+    parser.add_argument("--gpu", action="store_true", help="Explicitly enable GPU acceleration for models")
+    parser.add_argument("--cpu", action="store_true", help="Force CPU execution")
+    parser.add_argument("--devices", type=str, default=None, help="GPU devices string (e.g. '0' or '0:1' for T4 x 2)")
     return parser.parse_args()
+
+def run_smoke_test(args):
+    """
+    Fast GPU/CPU smoke test to verify Python, CatBoost, CUDA hardware,
+    data pipeline, training, and probability bounds.
+    """
+    import platform
+    import time
+    import subprocess
+    logger.info("==========================================================")
+    logger.info("             GPU & PIPELINE SMOKE TEST                    ")
+    logger.info("==========================================================")
+    logger.info(f"Python Version   : {platform.python_version()}")
+    
+    try:
+        import catboost as cb
+        logger.info(f"CatBoost Version : {cb.__version__}")
+    except ImportError:
+        logger.error("CatBoost is not installed!")
+        sys.exit(1)
+        
+    try:
+        import torch
+        cuda_avail = torch.cuda.is_available()
+        gpu_count = torch.cuda.device_count()
+        logger.info(f"CUDA Available   : {cuda_avail} (Devices: {gpu_count})")
+        if cuda_avail:
+            for i in range(gpu_count):
+                logger.info(f"  Device {i}        : {torch.cuda.get_device_name(i)}")
+    except ImportError:
+        cuda_avail = False
+        logger.info("PyTorch not installed for CUDA introspection.")
+
+    # Try running nvidia-smi
+    try:
+        smi_out = subprocess.check_output(["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader"]).decode().strip()
+        logger.info(f"NVIDIA-SMI Query : {smi_out}")
+    except Exception:
+        logger.info("NVIDIA-SMI       : Not available in this environment")
+
+    # Load small slice of real data
+    train_df, test_df, sample_sub_df = load_raw_data()
+    train_sample = train_df.sample(n=1000, random_state=args.seed).reset_index(drop=True)
+    test_sample = test_df.sample(n=200, random_state=args.seed).reset_index(drop=True)
+    
+    logger.info("Engineering features on smoke test slice...")
+    train_fe = engineer_features(train_sample)
+    test_fe = engineer_features(test_sample)
+
+    smoke_params = {
+        'iterations': 50,
+        'depth': 5,
+        'learning_rate': 0.05,
+        'verbose': 0
+    }
+    if args.gpu or (cuda_avail and not args.cpu):
+        smoke_params['task_type'] = 'GPU'
+        if args.devices:
+            smoke_params['devices'] = args.devices
+    else:
+        smoke_params['task_type'] = 'CPU'
+
+    logger.info(f"Running CatBoost smoke test with params: {smoke_params}...")
+    t0 = time.time()
+    results = train_cv_model("catboost", train_fe, test_fe, model_params=smoke_params, n_splits=2)
+    elapsed = time.time() - t0
+
+    oof = results['oof_probs']
+    test_p = results['test_probs']
+    metrics = results['oof_metrics']
+
+    assert not np.isnan(oof).any(), "NaN found in OOF predictions!"
+    assert not np.isinf(oof).any(), "Inf found in OOF predictions!"
+    assert (oof >= 0.0).all() and (oof <= 1.0).all(), "OOF probabilities out of [0, 1] bounds!"
+    assert (test_p >= 0.0).all() and (test_p <= 1.0).all(), "Test probabilities out of [0, 1] bounds!"
+
+    logger.info("----------------------------------------------------------")
+    logger.info("             SMOKE TEST SUMMARY RESULTS                   ")
+    logger.info(f" Train Shape     : {train_sample.shape}")
+    logger.info(f" Features Total  : {train_fe.shape[1]}")
+    logger.info(f" Execution Time  : {elapsed:.2f}s")
+    logger.info(f" OOF Log Loss    : {metrics['log_loss']:.5f}")
+    logger.info(f" OOF ROC-AUC     : {metrics['roc_auc']:.5f}")
+    logger.info(f" OOF PR-AUC      : {metrics['pr_auc']:.5f}")
+    logger.info(f" Positive Rate   : {float(train_sample[TARGET_COL].mean()):.4f}")
+    logger.info(f" Mean OOF Prob   : {float(np.mean(oof)):.4f}")
+    logger.info("----------------------------------------------------------")
+    logger.info("✅ SMOKE TEST PASSED! Environment and CatBoost are ready for full training.")
+    logger.info("==========================================================")
+    return
+
 
 def main():
     args = parse_args()
     set_seed(args.seed)
+
+    if args.gpu:
+        os.environ["GPU_ENABLED"] = "true"
+    elif args.cpu:
+        os.environ["GPU_ENABLED"] = "false"
+        
+    if args.devices:
+        os.environ["GPU_DEVICES"] = args.devices
+
+    if args.smoke_test:
+        run_smoke_test(args)
+        return
 
     n_splits = args.folds if args.folds is not None else (5 if args.quick else N_SPLITS)
     seeds = [42, 1337, 2026] if args.multi_seed else [args.seed]
@@ -329,6 +436,19 @@ def main():
         json.dump(experiment_record, f, indent=2)
     logger.info(f"Experiment record saved to {run_json_path}")
 
+    # Save raw OOF predictions for deep analysis
+    oof_df = pd.DataFrame({
+        ID_COL: train_df[ID_COL],
+        "target": y_true,
+        "oof_prediction": list(oof_dict.values())[0] if len(oof_dict) == 1 else blend_oof
+    })
+    for m in oof_dict:
+        oof_df[f"oof_{m}"] = oof_dict[m]
+        
+    oof_csv_path = experiments_dir / f"oof_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    oof_df.to_csv(oof_csv_path, index=False)
+    logger.info(f"OOF predictions saved to {oof_csv_path}")
+
     logger.info("==========================================================")
     logger.info("                  TRAINING PIPELINE COMPLETE               ")
     logger.info(f" Final OOF Log Loss : {final_oof_loss:.5f}")
@@ -336,6 +456,7 @@ def main():
     logger.info(f" Primary CSV Path   : {csv_path}")
     logger.info(f" Latest CSV Path    : {SUBMISSION_DIR / 'submission.csv'}")
     logger.info(f" Experiment record  : {run_json_path}")
+    logger.info(f" OOF Data Record    : {oof_csv_path}")
     logger.info("==========================================================")
 
 if __name__ == "__main__":

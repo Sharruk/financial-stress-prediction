@@ -21,9 +21,14 @@ DATA_DICTIONARY_PATH = RAW_DATA_DIR / "data_dictionary.csv"
 
 # Modeling Constants
 SEED = 42
-N_SPLITS = 10  # 10-Fold Stratified Cross-Validation for Grand Master stability
+N_SPLITS = 5  # 5-Fold Stratified Cross-Validation for clean, robust OOF baselines
 ID_COL = "ID"
 TARGET_COL = "liquidity_stress_next_30d"
+
+# Hardware / GPU Acceleration
+GPU_ENABLED = os.environ.get("GPU_ENABLED", "auto")  # "auto", "true", "false"
+GPU_DEVICES = os.environ.get("GPU_DEVICES", "0")      # e.g., "0" or "0:1" for multi-GPU
+CATBOOST_TASK_TYPE = "GPU" if (GPU_ENABLED in ["auto", "true"]) else "CPU"
 
 # Column Categories
 CATEGORICAL_COLS = [

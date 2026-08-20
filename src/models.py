@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import pandas as pd
 from lightgbm import LGBMClassifier
@@ -15,21 +16,14 @@ logger = get_logger()
 # -------------------------------------------------------------
 def is_gpu_available():
     """Check if NVIDIA CUDA GPU is available for acceleration."""
-    try:
-        import xgboost as xgb
-        test_model = xgb.XGBClassifier(device='cuda', tree_method='hist', n_estimators=1)
-        test_model.fit(np.zeros((2, 2)), np.array([0, 1]))
-        return True
-    except Exception:
-        pass
-    
+    if os.environ.get("CUDA_VISIBLE_DEVICES") == "" or os.environ.get("GPU_ENABLED") == "false":
+        return False
     try:
         import torch
-        if torch.cuda.is_available():
+        if torch.cuda.is_available() and torch.cuda.device_count() > 0:
             return True
     except Exception:
         pass
-        
     return False
 
 GPU_AVAILABLE = is_gpu_available()
@@ -173,6 +167,7 @@ def get_model(model_name, params=None):
             'random_state': SEED,
             'n_jobs': -1,
             'eval_metric': 'logloss',
+            'early_stopping_rounds': 150,
             'tree_method': 'hist',
             'device': 'cuda' if GPU_AVAILABLE else 'cpu'
         }
@@ -182,16 +177,28 @@ def get_model(model_name, params=None):
     elif model_name.lower() == "catboost":
         if not CATBOOST_AVAILABLE:
             raise ImportError("CatBoost is not available.")
+        
+        gpu_detected = is_gpu_available()
         default_params = {
-            'iterations': 1800,
-            'learning_rate': 0.018,
+            'iterations': 2500,
+            'learning_rate': 0.015,
             'depth': 6,
-            'l2_leaf_reg': 5.0,
+            'l2_leaf_reg': 8.0,
+            'random_strength': 0.8,
+            'bagging_temperature': 0.2,
+            'border_count': 128,
             'eval_metric': 'Logloss',
+            'loss_function': 'Logloss',
             'random_seed': SEED,
             'verbose': 0,
-            'task_type': 'GPU' if GPU_AVAILABLE else 'CPU'
+            'task_type': 'GPU' if gpu_detected else 'CPU'
         }
+        
+        # Check if custom devices passed or in env
+        gpu_devices = os.environ.get("GPU_DEVICES", None)
+        if default_params['task_type'] == 'GPU' and gpu_devices:
+            default_params['devices'] = gpu_devices
+            
         default_params.update(p)
         return cb.CatBoostClassifier(**default_params)
 

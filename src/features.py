@@ -58,12 +58,18 @@ def engineer_features(data_df):
     new_cols = {}
     
     # -------------------------------------------------------------
-    # 1. Profile, Interactions & Group Peer Benchmarks
+    # 1. Profile, Interactions & Domain Indicators
     # -------------------------------------------------------------
     logger.info("Computing profile, cross-interactions & peer benchmarks...")
     new_cols['arpu_per_age'] = df['arpu'] / (df['age'] + 1.0)
     new_cols['activity_per_age'] = df['x_90_d_activity_rate'] / (df['age'] + 1.0)
     new_cols['arpu_activity_interact'] = df['arpu'] * df['x_90_d_activity_rate']
+    
+    # Financial Stress Burden Ratios
+    # Paybill (utilities/bills) vs Merchant (discretionary)
+    new_cols['m1_necessity_ratio'] = df['m1_paybill_total_value'] / (df['m1_merchantpay_total_value'] + 1.0)
+    new_cols['m1_solvency_buffer'] = df['m1_daily_avg_bal'] / (df['m1_paybill_total_value'] + df['m1_withdraw_total_value'] + 1.0)
+    new_cols['m1_p2p_dependency_ratio'] = df['m1_received_total_value'] / (df['m1_deposit_total_value'] + df['m1_transfer_from_bank_total_value'] + 1.0)
     
     # Log transforms for skewed variables
     new_cols['log_arpu'] = np.log1p(np.maximum(0, df['arpu'].values))
@@ -96,22 +102,6 @@ def engineer_features(data_df):
     for c in cat_df.columns:
         freq = cat_df[c].value_counts(normalize=True).to_dict()
         new_cols[f'{c}_freq'] = cat_df[c].map(freq).astype(np.float32)
-
-    # Peer relative group benchmarks & Z-scores
-    for group_col in ['segment', 'region', 'earning_pattern', 'segment_earning']:
-        col_to_group = cat_df[group_col] if group_col in cat_df else df[group_col]
-        grp_arpu_mean = df.groupby(col_to_group)['arpu'].transform('mean')
-        grp_arpu_std = df.groupby(col_to_group)['arpu'].transform('std').fillna(1.0)
-        grp_act = df.groupby(col_to_group)['x_90_d_activity_rate'].transform('mean')
-        grp_m1_bal_mean = df.groupby(col_to_group)['m1_daily_avg_bal'].transform('mean')
-        grp_m1_bal_std = df.groupby(col_to_group)['m1_daily_avg_bal'].transform('std').fillna(1.0)
-        
-        new_cols[f'arpu_vs_{group_col}_mean'] = df['arpu'] / (grp_arpu_mean + 1.0)
-        new_cols[f'arpu_{group_col}_zscore'] = (df['arpu'] - grp_arpu_mean) / (grp_arpu_std + 1e-4)
-        new_cols[f'activity_vs_{group_col}_mean'] = df['x_90_d_activity_rate'] / (grp_act + 1e-4)
-        new_cols[f'm1_bal_vs_{group_col}_mean'] = df['m1_daily_avg_bal'] / (grp_m1_bal_mean + 1.0)
-        new_cols[f'm1_bal_{group_col}_zscore'] = (df['m1_daily_avg_bal'] - grp_m1_bal_mean) / (grp_m1_bal_std + 1e-4)
-        new_cols[f'm1_bal_pct_in_{group_col}'] = df.groupby(col_to_group)['m1_daily_avg_bal'].rank(pct=True).astype(np.float32)
 
     # -------------------------------------------------------------
     # 2. Balance Trajectory, Physics Dynamics & Exhaustion Projections
@@ -394,35 +384,55 @@ def engineer_features(data_df):
     new_features_df = pd.DataFrame(new_cols, index=df.index)
     df = pd.concat([df, new_features_df], axis=1)
     
-    # -------------------------------------------------------------
-    # 8. Unsupervised Financial Personas (K-Means Clustering)
-    # -------------------------------------------------------------
-    logger.info("Computing unsupervised financial behavioral personas (K-Means)...")
-    cluster_features = [
-        'arpu', 'age', 'x_90_d_activity_rate', 'bal_mean', 'bal_slope',
-        'm1_inflow_total', 'm1_outflow_total', 'cash_burn_rate_m1',
-        'composite_stress_index', 'total_deficit_months_6m'
-    ]
-    sub_mat = np.nan_to_num(df[cluster_features].values, nan=0.0)
-    sub_mean = np.mean(sub_mat, axis=0, keepdims=True)
-    sub_std = np.std(sub_mat, axis=0, keepdims=True) + 1e-4
-    sub_norm = (sub_mat - sub_mean) / sub_std
-    
-    kmeans = KMeans(n_clusters=8, random_state=SEED, n_init=5)
-    cluster_labels = kmeans.fit_predict(sub_norm)
-    cluster_distances = kmeans.transform(sub_norm)
-    
-    cluster_cols = {}
-    cluster_cols['financial_persona_cluster'] = cluster_labels.astype(str)
-    for c_i in range(8):
-        cluster_cols[f'dist_to_persona_cluster_{c_i}'] = cluster_distances[:, c_i].astype(np.float32)
-        
-    cluster_df = pd.DataFrame(cluster_cols, index=df.index)
-    df = pd.concat([df, cluster_df], axis=1)
-    
     # Clean infs/NaNs if any were created during divisions
     num_cols = df.select_dtypes(include=[np.number]).columns
     df[num_cols] = df[num_cols].replace([np.inf, -np.inf], np.nan).fillna(0.0)
     
     logger.info(f"Grand Master v6 Feature engineering completed! Total columns: {df.shape[1]}")
     return df
+
+
+def fit_fold_unsupervised_personas(X_tr, n_clusters=8, seed=SEED):
+    """
+    Fits KMeans behavioral personas strictly on training fold features (Leakage-Safe).
+    Returns the fitted scaler and kmeans model.
+    """
+    cluster_features = [
+        'arpu', 'age', 'x_90_d_activity_rate', 'bal_mean', 'bal_slope',
+        'm1_inflow_total', 'm1_outflow_total', 'cash_burn_rate_m1',
+        'composite_stress_index', 'total_deficit_months_6m'
+    ]
+    avail_cols = [c for c in cluster_features if c in X_tr.columns]
+    if not avail_cols:
+        return None, None, []
+        
+    sub_mat = np.nan_to_num(X_tr[avail_cols].values, nan=0.0)
+    sub_mean = np.mean(sub_mat, axis=0, keepdims=True)
+    sub_std = np.std(sub_mat, axis=0, keepdims=True) + 1e-4
+    sub_norm = (sub_mat - sub_mean) / sub_std
+    
+    kmeans = KMeans(n_clusters=n_clusters, random_state=seed, n_init=5)
+    kmeans.fit(sub_norm)
+    
+    scaler_params = (sub_mean, sub_std)
+    return kmeans, scaler_params, avail_cols
+
+
+def transform_fold_unsupervised_personas(df, kmeans, scaler_params, avail_cols):
+    """
+    Applies pre-fitted KMeans clustering model to a fold slice (Train, Val, or Test).
+    """
+    if kmeans is None or not avail_cols:
+        return df
+        
+    sub_mean, sub_std = scaler_params
+    sub_mat = np.nan_to_num(df[avail_cols].values, nan=0.0)
+    sub_norm = (sub_mat - sub_mean) / sub_std
+    
+    cluster_distances = kmeans.transform(sub_norm)
+    cluster_cols = {}
+    for c_i in range(cluster_distances.shape[1]):
+        cluster_cols[f'dist_to_persona_cluster_{c_i}'] = cluster_distances[:, c_i].astype(np.float32)
+        
+    cluster_df = pd.DataFrame(cluster_cols, index=df.index)
+    return pd.concat([df, cluster_df], axis=1)
