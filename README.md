@@ -210,7 +210,7 @@ The local Streamlit dashboard only requires lightweight metadata, meaning you do
 You can orchestrate the entire end-to-end Kaggle training workflow using a single command wrapper:
 
 1. Open a Kaggle Notebook and set **Accelerator → GPU T4 × 2**.
-2. Clone the desired branch:
+2. Clone the `nat` branch:
    ```bash
    git clone -b nat git@github.com:Sharruk/financial-stress-prediction.git
    ```
@@ -218,23 +218,43 @@ You can orchestrate the entire end-to-end Kaggle training workflow using a singl
    ```bash
    cd financial-stress-prediction
    ```
-4. Run the one-command orchestration script:
+4. Run the one-command orchestration script (trains the 10-Fold 4-Model Multi-Seed Ensemble by default):
    ```bash
    python kaggle_run.py
    ```
+
+> [!NOTE]
+> **Default Kaggle Run Configuration:**
+> - **Models:** 4-Model Orthogonal Diversity Ensemble (`catboost`, `xgboost`, `lightgbm_goss`, `hist_gbm`)
+> - **Validation:** 10-Fold Stratified Cross-Validation (90% training data per fold)
+> - **Multi-Seed Bagging:** Seeds `[42, 1337, 2026]` for variance reduction across folds
+> - **Hardware & Speed:** ~20–25 minutes total wall clock time on Kaggle T4 × 2 GPU
+> - **Output Artifacts:**
+>   - Primary submission: `data/submissions/submission.csv`
+>   - Timestamped submission: `data/submissions/zindi_stress_sub_*.csv`
+>   - Experiment metadata & metrics: `experiments/run_*.json`
+>   - Out-Of-Fold predictions & correlations: `experiments/oof_*.csv`
 
 > [!NOTE]
 > Kaggle SSH authentication (adding your private SSH key in Kaggle Secrets / `.ssh/id_rsa`) must already be configured to clone via SSH and to use `--push-results`.
 
 #### Optional Execution Flags
 
-- **Smoke test only** (verify environment and hardware in seconds):
+- **Smoke test only** (verify environment and GPU hardware in seconds):
   ```bash
   python kaggle_run.py --smoke-only
   ```
+- **Reproduce Previous CatBoost-Only 5-Fold Experiment**:
+  ```bash
+  python kaggle_run.py --models catboost --folds 5 --single-seed
+  ```
+- **Single-seed execution of 4-model ensemble**:
+  ```bash
+  python kaggle_run.py --single-seed
+  ```
 - **Custom GPU configuration & folds**:
   ```bash
-  python kaggle_run.py --gpu --devices 0:1 --folds 5
+  python kaggle_run.py --gpu --devices 0:1 --folds 10
   ```
 - **Force CPU execution**:
   ```bash
@@ -248,8 +268,8 @@ You can orchestrate the entire end-to-end Kaggle training workflow using a singl
 #### Underlying Pipeline Commands (Manual Workflow)
 
 Under the hood, `kaggle_run.py` automatically executes and verifies:
-1. Smoke test: `python train.py --smoke-test`
-2. Full 5-fold training: `python train.py --models catboost --folds 5 --gpu --devices 0:1`
+1. Smoke test: `python train.py --smoke-test --gpu --devices 0:1`
+2. Full 10-fold multi-seed training: `python train.py --models catboost xgboost lightgbm_goss hist_gbm --folds 10 --multi-seed --gpu --devices 0:1`
 
 ### 2. Download Artifacts to Local Machine
 

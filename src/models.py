@@ -138,8 +138,8 @@ def get_model(model_name, params=None):
     elif model_name.lower() == "lightgbm_goss":
         default_params = {
             'boosting_type': 'goss',
-            'n_estimators': 1400,
-            'learning_rate': 0.018,
+            'n_estimators': 1500,
+            'learning_rate': 0.015,
             'num_leaves': 45,
             'max_depth': 7,
             'colsample_bytree': 0.6,
@@ -155,8 +155,8 @@ def get_model(model_name, params=None):
         
     elif model_name.lower() == "xgboost":
         default_params = {
-            'n_estimators': 1500,
-            'learning_rate': 0.015,
+            'n_estimators': 1800,
+            'learning_rate': 0.014,
             'max_depth': 6,
             'subsample': 0.8,
             'colsample_bytree': 0.6,
@@ -180,7 +180,7 @@ def get_model(model_name, params=None):
         
         gpu_detected = is_gpu_available()
         default_params = {
-            'iterations': 2500,
+            'iterations': 2200,
             'learning_rate': 0.015,
             'depth': 6,
             'l2_leaf_reg': 8.0,
@@ -204,8 +204,8 @@ def get_model(model_name, params=None):
 
     elif model_name.lower() == "hist_gbm":
         default_params = {
-            'max_iter': 1000,
-            'learning_rate': 0.018,
+            'max_iter': 1200,
+            'learning_rate': 0.015,
             'max_leaf_nodes': 45,
             'max_depth': 8,
             'min_samples_leaf': 25,

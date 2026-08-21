@@ -244,16 +244,29 @@ def step5_run_smoke_test(repo_root: Path, gpu_mode: bool, devices: str | None) -
 # ==============================================================================
 # STEP 6: Run Full Training
 # ==============================================================================
-def step6_run_full_training(repo_root: Path, models: list[str], folds: int, gpu_mode: bool, devices: str | None) -> bool:
+def step6_run_full_training(
+    repo_root: Path,
+    models: list[str],
+    folds: int,
+    gpu_mode: bool,
+    devices: str | None,
+    multi_seed: bool = True
+) -> bool:
     models_str = " ".join(models).upper()
     accel_str = "GPU" if gpu_mode else "CPU"
+    seed_str = "Multi-Seed [42, 1337, 2026]" if multi_seed else "Single-Seed [42]"
     print("\n==========================================================")
-    print(f" [2/2] RUNNING FULL {folds}-FOLD {models_str} {accel_str} TRAINING")
+    print(f" [2/2] RUNNING FULL {folds}-FOLD {models_str} {accel_str} TRAINING ({seed_str})")
     if gpu_mode and devices:
         print(f" GPU DEVICES: {devices}")
     print("==========================================================")
 
     cmd = [sys.executable, "train.py", "--models", *models, "--folds", str(folds)]
+    if multi_seed:
+        cmd.append("--multi-seed")
+    else:
+        cmd.append("--single-seed")
+
     if gpu_mode:
         cmd.append("--gpu")
         if devices:
@@ -446,8 +459,15 @@ def parse_args():
     parser.add_argument("--smoke-only", action="store_true", help="Run only the smoke test and exit")
     parser.add_argument("--skip-smoke", action="store_true", help="Skip the smoke test and proceed directly to full training")
     parser.add_argument("--push-results", action="store_true", help="Commit and push experiment and submission artifacts to GitHub")
-    parser.add_argument("--folds", type=int, default=5, help="Number of cross-validation folds")
-    parser.add_argument("--models", nargs="+", default=["catboost"], help="List of models to train (default: ['catboost'])")
+    parser.add_argument("--folds", type=int, default=10, help="Number of cross-validation folds (default: 10)")
+    parser.add_argument(
+        "--models",
+        nargs="+",
+        default=["catboost", "xgboost", "lightgbm_goss", "hist_gbm"],
+        help="List of models to train (default: ['catboost', 'xgboost', 'lightgbm_goss', 'hist_gbm'])"
+    )
+    parser.add_argument("--multi-seed", action="store_true", default=True, help="Enable multi-seed bagging [42, 1337, 2026] (default: True)")
+    parser.add_argument("--single-seed", dest="multi_seed", action="store_false", help="Disable multi-seed bagging (run single seed)")
     return parser.parse_args()
 
 
@@ -482,7 +502,14 @@ def main():
 
     # Step 6: Full Training
     if not args.smoke_only:
-        step6_run_full_training(repo_root, models=args.models, folds=args.folds, gpu_mode=gpu_mode, devices=args.devices)
+        step6_run_full_training(
+            repo_root,
+            models=args.models,
+            folds=args.folds,
+            gpu_mode=gpu_mode,
+            devices=args.devices,
+            multi_seed=args.multi_seed
+        )
         train_status = "PASS"
 
         # Step 7: Verify Output Artifacts

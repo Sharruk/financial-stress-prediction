@@ -21,7 +21,7 @@ DATA_DICTIONARY_PATH = RAW_DATA_DIR / "data_dictionary.csv"
 
 # Modeling Constants
 SEED = 42
-N_SPLITS = 5  # 5-Fold Stratified Cross-Validation for clean, robust OOF baselines
+N_SPLITS = 10  # 10-Fold Stratified Cross-Validation for clean, robust OOF baselines
 ID_COL = "ID"
 TARGET_COL = "liquidity_stress_next_30d"
 

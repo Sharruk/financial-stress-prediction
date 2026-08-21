@@ -39,14 +39,15 @@ def parse_args():
     parser.add_argument(
         "--models",
         nargs="+",
-        default=["catboost"],
-        help="List of models to train (default: ['catboost'])"
+        default=["catboost", "xgboost", "lightgbm_goss", "hist_gbm"],
+        help="List of models to train (default: ['catboost', 'xgboost', 'lightgbm_goss', 'hist_gbm'])"
     )
     parser.add_argument("--smoke-test", action="store_true", help="Run fast GPU/CPU smoke test to verify pipeline & hardware")
     parser.add_argument("--quick", action="store_true", help="Run quick baseline mode with fewer iterations on subsample")
-    parser.add_argument("--folds", type=int, default=None, help="Number of cross-validation folds (default: 5)")
+    parser.add_argument("--folds", type=int, default=10, help="Number of cross-validation folds (default: 10)")
     parser.add_argument("--seed", type=int, default=SEED, help="Primary random seed")
-    parser.add_argument("--multi-seed", action="store_true", help="Run multi-seed bagging (Seeds 42, 1337, 2026)")
+    parser.add_argument("--multi-seed", action="store_true", default=True, help="Run multi-seed bagging [42, 1337, 2026] (default: True)")
+    parser.add_argument("--single-seed", dest="multi_seed", action="store_false", help="Disable multi-seed bagging (run single seed only)")
     parser.add_argument("--gpu", action="store_true", help="Explicitly enable GPU acceleration for models")
     parser.add_argument("--cpu", action="store_true", help="Force CPU execution")
     parser.add_argument("--devices", type=str, default=None, help="GPU devices string (e.g. '0' or '0:1' for T4 x 2)")
@@ -198,10 +199,10 @@ def main():
     else:
         lgb_params = {'n_estimators': 1800, 'learning_rate': 0.015}
         lgb_dart_params = {'n_estimators': 1400, 'learning_rate': 0.022}
-        lgb_goss_params = {'n_estimators': 1400, 'learning_rate': 0.018}
-        xgb_params = {'n_estimators': 1500, 'learning_rate': 0.015}
-        cb_params = {'iterations': 1800, 'learning_rate': 0.018}
-        hgb_params = {'max_iter': 1000, 'learning_rate': 0.018}
+        lgb_goss_params = {'n_estimators': 1500, 'learning_rate': 0.015}
+        xgb_params = {'n_estimators': 1800, 'learning_rate': 0.014}
+        cb_params = {'iterations': 2200, 'learning_rate': 0.015}
+        hgb_params = {'max_iter': 1200, 'learning_rate': 0.015}
         et_params = {'n_estimators': 600}
         rf_params = {'n_estimators': 600}
         mlp_params = {'epochs': 25}
@@ -224,10 +225,12 @@ def main():
             # Multi-seed bagging per model if requested
             seed_oofs = []
             seed_tests = []
+            seed_fold_scores = []
+            seed_train_metrics = []
             
             for s in seeds:
                 s_params = m_params.copy()
-                if m_name in ['lightgbm', 'lightgbm_dart', 'lightgbm_goss', 'xgboost', 'extra_trees', 'random_forest']:
+                if m_name in ['lightgbm', 'lightgbm_dart', 'lightgbm_goss', 'xgboost', 'extra_trees', 'random_forest', 'hist_gbm', 'logistic_regression']:
                     s_params['random_state'] = s
                 elif m_name == 'catboost':
                     s_params['random_seed'] = s
@@ -235,6 +238,8 @@ def main():
                 results = train_cv_model(m_name, train_fe, test_fe, model_params=s_params, n_splits=n_splits)
                 seed_oofs.append(results['oof_probs'])
                 seed_tests.append(results['test_probs'])
+                seed_fold_scores.append(results['fold_scores'])
+                seed_train_metrics.append(results.get('train_metrics', {}))
 
             avg_oof = np.mean(seed_oofs, axis=0)
             avg_test = np.mean(seed_tests, axis=0)
@@ -242,10 +247,15 @@ def main():
             oof_dict[m_name] = avg_oof
             test_dict[m_name] = avg_test
 
+            # Average training metrics across seeds
+            avg_train_metrics = {}
+            if seed_train_metrics and seed_train_metrics[0]:
+                for k in seed_train_metrics[0].keys():
+                    avg_train_metrics[k] = float(np.mean([x[k] for x in seed_train_metrics if k in x]))
+
             m_metrics = evaluate_predictions(train_fe[TARGET_COL].values, avg_oof)
-            train_metrics = results.get('train_metrics', {})
             from src.utils import calculate_generalization_gap
-            gap = calculate_generalization_gap(train_metrics, m_metrics)
+            gap = calculate_generalization_gap(avg_train_metrics, m_metrics)
 
             model_summaries.append({
                 'Model': m_name.upper(),
@@ -253,9 +263,11 @@ def main():
                 'ROC-AUC': m_metrics['roc_auc'],
                 'Brier Score': m_metrics['brier_score'],
                 '_metrics_full': m_metrics,
-                '_train_metrics': train_metrics,
+                '_train_metrics': avg_train_metrics,
                 '_gap': gap,
-                '_params': m_params
+                '_params': m_params,
+                '_seeds': seeds,
+                '_fold_scores': seed_fold_scores[0] if len(seeds) == 1 else seed_fold_scores
             })
 
             if results['feature_importances'] is not None:
@@ -294,6 +306,15 @@ def main():
     logger.info("\n================ SINGLE MODELS CV BENCHMARK ================")
     logger.info("\n" + summary_df.to_string(index=False))
     logger.info("============================================================\n")
+
+    # Calculate and log OOF Prediction Correlation Matrix across models
+    model_correlations = None
+    if len(oof_dict) > 1:
+        oof_corr_df = pd.DataFrame(oof_dict).corr()
+        model_correlations = oof_corr_df.to_dict()
+        logger.info("\n================ MODEL OOF CORRELATION MATRIX ================")
+        logger.info("\n" + oof_corr_df.to_string())
+        logger.info("==============================================================\n")
 
     # 4. Multi-Model Ensembling, Blending & Calibration
     y_true = train_fe[TARGET_COL].values
@@ -407,10 +428,12 @@ def main():
         "feature_version": "v6",
         "feature_count": len(train_fe.columns) - 1,
         "cv_folds": n_splits,
+        "seeds": seeds,
         "hyperparameters": {s['Model']: s['_params'] for s in model_summaries},
         "training_metrics": None,
         "validation_metrics": None,
         "oof_metrics": strategy_metrics,
+        "model_correlations": model_correlations,
         "generalization_gap": None,
         "ensemble_information": {
             "strategy": selected_strategy,
@@ -418,15 +441,17 @@ def main():
         },
         "training_time": None,
         "status": "completed",
-        "notes": f"Grand Master v6 Ultimate training run with {n_splits}-fold CV, CatBoost GPU, LightGBM GOSS, and Prior Calibration"
+        "notes": f"Grand Master v6 10-Fold 4-Model Multi-Seed Ensemble (Seeds {seeds}, Folds {n_splits})"
     }
 
     experiment_record["_base_models"] = [
         {
             "name": s["Model"],
             "params": s["_params"],
+            "seeds": s["_seeds"],
             "training_metrics": s["_train_metrics"],
             "oof_metrics": s["_metrics_full"],
+            "fold_scores": s["_fold_scores"],
             "generalization_gap": s["_gap"]
         }
         for s in model_summaries
