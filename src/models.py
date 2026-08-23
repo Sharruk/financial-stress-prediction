@@ -18,6 +18,22 @@ def is_gpu_available():
     """Check if NVIDIA CUDA GPU is available for acceleration."""
     if os.environ.get("CUDA_VISIBLE_DEVICES") == "" or os.environ.get("GPU_ENABLED") == "false":
         return False
+    if os.environ.get("GPU_ENABLED") == "true":
+        return True
+    try:
+        import catboost as cb
+        test_cb = cb.CatBoostClassifier(iterations=1, task_type='GPU', verbose=0)
+        test_cb.fit(np.zeros((2, 2)), np.array([0, 1]))
+        return True
+    except Exception:
+        pass
+    try:
+        import xgboost as xgb
+        test_model = xgb.XGBClassifier(device='cuda', tree_method='hist', n_estimators=1)
+        test_model.fit(np.zeros((2, 2)), np.array([0, 1]))
+        return True
+    except Exception:
+        pass
     try:
         import torch
         if torch.cuda.is_available() and torch.cuda.device_count() > 0:

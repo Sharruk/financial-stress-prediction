@@ -337,7 +337,12 @@ def refit_and_save_model(
     logger.info(
         f"Refitting {model_name.upper()} on full training data ({len(X_train_full)} rows)..."
     )
-    model = get_model(model_name, params=params)
+    refit_params = params.copy() if params else {}
+    if "early_stopping_rounds" in refit_params:
+        del refit_params["early_stopping_rounds"]
+    model = get_model(model_name, params=refit_params)
+    if hasattr(model, "early_stopping_rounds"):
+        model.set_params(early_stopping_rounds=None)
     X_arr = X_train_full.values if hasattr(X_train_full, "values") else X_train_full
     model.fit(X_arr, y_train)
     save_model(model, model_name, models_dir)
