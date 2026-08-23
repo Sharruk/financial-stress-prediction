@@ -39,16 +39,15 @@ def parse_args():
     parser.add_argument(
         "--models",
         nargs="+",
-        default=["catboost", "xgboost", "lightgbm_goss", "hist_gbm"],
-        help="List of models to train (default: ['catboost', 'xgboost', 'lightgbm_goss', 'hist_gbm'])"
+        default=["catboost", "xgboost", "lightgbm_goss"],
+        help="List of models to train (default: ['catboost', 'xgboost', 'lightgbm_goss'])"
     )
     parser.add_argument("--smoke-test", action="store_true", help="Run fast GPU/CPU smoke test to verify pipeline & hardware")
     parser.add_argument("--quick", action="store_true", help="Run quick baseline mode with fewer iterations on subsample")
     parser.add_argument("--folds", type=int, default=10, help="Number of cross-validation folds (default: 10)")
     parser.add_argument("--seed", type=int, default=SEED, help="Primary random seed")
-    parser.add_argument("--multi-seed", action="store_true", default=True, help="Run multi-seed bagging [42, 1337, 2026] (default: True)")
-    parser.add_argument("--single-seed", dest="multi_seed", action="store_false", help="Disable multi-seed bagging (run single seed only)")
-    parser.add_argument("--gpu", action="store_true", help="Explicitly enable GPU acceleration for models")
+    parser.add_argument("--multi-seed", action="store_true", default=False, help="Run multi-seed bagging [42, 1337, 2026] (default: False)")
+    parser.add_argument("--gpu", action="store_true", default=True, help="Explicitly enable GPU acceleration for models (default: True)")
     parser.add_argument("--cpu", action="store_true", help="Force CPU execution")
     parser.add_argument("--devices", type=str, default=None, help="GPU devices string (e.g. '0' or '0:1' for T4 x 2)")
     return parser.parse_args()
