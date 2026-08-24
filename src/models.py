@@ -154,11 +154,11 @@ def get_model(model_name, params=None):
     elif model_name.lower() == "lightgbm_goss":
         default_params = {
             'boosting_type': 'goss',
-            'n_estimators': 1500,
-            'learning_rate': 0.015,
+            'n_estimators': 1800,
+            'learning_rate': 0.025,
             'num_leaves': 45,
             'max_depth': 7,
-            'colsample_bytree': 0.6,
+            'colsample_bytree': 0.65,
             'reg_alpha': 0.5,
             'reg_lambda': 4.0,
             'scale_pos_weight': 1.0,
@@ -171,14 +171,14 @@ def get_model(model_name, params=None):
         
     elif model_name.lower() == "xgboost":
         default_params = {
-            'n_estimators': 1800,
-            'learning_rate': 0.014,
+            'n_estimators': 2000,
+            'learning_rate': 0.022,
             'max_depth': 6,
-            'subsample': 0.8,
-            'colsample_bytree': 0.6,
+            'subsample': 0.85,
+            'colsample_bytree': 0.65,
             'min_child_weight': 5,
             'reg_alpha': 0.5,
-            'reg_lambda': 5.0,
+            'reg_lambda': 4.0,
             'scale_pos_weight': 1.0,
             'random_state': SEED,
             'n_jobs': -1,
@@ -196,12 +196,12 @@ def get_model(model_name, params=None):
         
         gpu_detected = is_gpu_available()
         default_params = {
-            'iterations': 2200,
-            'learning_rate': 0.015,
+            'iterations': 2500,
+            'learning_rate': 0.025,
             'depth': 6,
-            'l2_leaf_reg': 8.0,
-            'random_strength': 0.8,
-            'bagging_temperature': 0.2,
+            'l2_leaf_reg': 6.0,
+            'random_strength': 0.7,
+            'bagging_temperature': 0.3,
             'border_count': 128,
             'eval_metric': 'Logloss',
             'loss_function': 'Logloss',

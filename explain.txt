@@ -189,16 +189,17 @@ STEP 8: LEADERBOARD METRICS & MATHEMATICAL GAP ANALYSIS
 ================================================================================
 - Rank 79: Multi Score = 0.7040 | ROC-AUC = 0.9016 | Log Loss = 0.2545
 - Rank 68: Multi Score = 0.7135 | ROC-AUC = 0.9085 | Log Loss = 0.2477
+- Rank 59: Multi Score = 0.7193 | ROC-AUC = 0.9111 | Log Loss = 0.2431 (Current Active Score!)
 - Rank 1:  Multi Score = 0.7394 | ROC-AUC = 0.9224 | Log Loss = 0.2277
-- With 488 features, CatBoost GPU, and Prior Alignment, our models target the Top 10!
+- With 489 features, CatBoost GPU, Cashflow Elasticity, and Multi-Seed Ensembling, our models target the Top 10!
 
 ================================================================================
-STEP 9: EXECUTION GUIDE (HOW TO RUN FULL TRAINING ON GPU)
+STEP 9: EXECUTION GUIDE (KAGGLE GPU & LOCAL EXECUTION)
 ================================================================================
-1. Activate Environment (Windows Git Bash):
-   $ source venv/Scripts/activate
+1. Kaggle Execution (for Friend / Cloud GPU):
+   $ python kaggle_run.py --gpu --devices 0:1 --multi-seed --push-results
 
-2. Run Full 10-Fold Model Training on all 40,000 samples (auto uses NVIDIA GPU):
+2. Local Laptop Training on NVIDIA GeForce RTX 3050 GPU:
    $ python train.py
 
 3. Output Location:

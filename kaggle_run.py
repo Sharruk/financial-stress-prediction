@@ -463,8 +463,8 @@ def parse_args():
     parser.add_argument(
         "--models",
         nargs="+",
-        default=["catboost", "xgboost", "lightgbm_goss", "hist_gbm"],
-        help="List of models to train (default: ['catboost', 'xgboost', 'lightgbm_goss', 'hist_gbm'])"
+        default=["catboost", "xgboost", "lightgbm_goss"],
+        help="List of models to train (default: ['catboost', 'xgboost', 'lightgbm_goss'])"
     )
     parser.add_argument("--multi-seed", action="store_true", default=True, help="Enable multi-seed bagging [42, 1337, 2026] (default: True)")
     parser.add_argument("--single-seed", dest="multi_seed", action="store_false", help="Disable multi-seed bagging (run single seed)")
