@@ -33,6 +33,22 @@ def apply_temperature_scaling(probs, temp):
     raw_logits = logit(np.clip(probs, eps, 1.0 - eps))
     return expit(raw_logits / temp)
 
+from sklearn.isotonic import IsotonicRegression
+
+def fit_isotonic_calibrator(y_true, oof_probs):
+    """
+    Fits non-parametric monotonic isotonic regression mapping OOF probabilities to empirical truth.
+    Slashes Log Loss without degrading ROC-AUC ranking power.
+    """
+    iso = IsotonicRegression(out_of_bounds='clip', y_min=0.001, y_max=0.999)
+    iso.fit(oof_probs, y_true)
+    calibrated_oof = iso.predict(oof_probs)
+    return iso, calibrated_oof
+
+def apply_isotonic_scaling(iso_reg, probs):
+    """Applies fitted isotonic calibration curve to test probabilities."""
+    return iso_reg.predict(probs)
+
 def align_prior_probability(test_probs, train_prior=0.1500):
     """
     Calibrate test probability posteriors using Bayesian Odds Ratio alignment:
@@ -46,7 +62,6 @@ def align_prior_probability(test_probs, train_prior=0.1500):
     if abs(current_mean - train_prior) < 0.005:
         return clipped_probs
         
-    # Find shift delta to align mean
     def shift_loss(delta):
         shifted = expit(raw_logits + delta[0])
         return (np.mean(shifted) - train_prior) ** 2

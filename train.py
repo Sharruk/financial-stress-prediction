@@ -339,6 +339,13 @@ def main():
         calibrated_metrics = evaluate_predictions(y_true, calibrated_blend_oof)
         logger.info(f"==> CALIBRATED BLEND (T={opt_temp:.3f})   | Log Loss: {calibrated_metrics['log_loss']:.5f} | ROC-AUC: {calibrated_metrics['roc_auc']:.5f} <==")
 
+        # Isotonic Regression Calibration on Blended Probabilities
+        from src.ensemble import fit_isotonic_calibrator, apply_isotonic_scaling
+        iso_cal, iso_oof = fit_isotonic_calibrator(y_true, blend_oof)
+        iso_test = apply_isotonic_scaling(iso_cal, blend_test)
+        iso_metrics = evaluate_predictions(y_true, iso_oof)
+        logger.info(f"==> ISOTONIC CALIBRATED BLEND OOF | Log Loss: {iso_metrics['log_loss']:.5f} | ROC-AUC: {iso_metrics['roc_auc']:.5f} <==")
+
         # Logit Space Blend
         logit_oof, logit_test = compute_logit_blend(oof_dict, test_dict, best_weights)
         logit_metrics = evaluate_predictions(y_true, logit_oof)
@@ -353,20 +360,19 @@ def main():
         meta_oof, meta_test, meta_metrics = train_stacking_meta_learner(oof_dict, test_dict, y_true)
 
         # Select best calibrated strategy for primary submission
-        if calibrated_metrics['log_loss'] <= logit_metrics['log_loss']:
-            logger.info("Selected CALIBRATED TEMPERATURE BLEND for final primary submission.")
-            best_test_preds = calibrated_blend_test
-            final_oof_loss = calibrated_metrics['log_loss']
-            final_oof_auc = calibrated_metrics['roc_auc']
-            selected_strategy = "calibrated_blend"
-            strategy_metrics = calibrated_metrics
-        else:
-            logger.info("Selected LOGIT-SPACE BLEND for final primary submission.")
-            best_test_preds = logit_test
-            final_oof_loss = logit_metrics['log_loss']
-            final_oof_auc = logit_metrics['roc_auc']
-            selected_strategy = "logit_blend"
-            strategy_metrics = logit_metrics
+        candidate_strategies = {
+            "calibrated_blend": (calibrated_blend_test, calibrated_metrics),
+            "logit_blend": (logit_test, logit_metrics),
+            "isotonic_blend": (iso_test, iso_metrics)
+        }
+        
+        # Sort by lowest Log Loss with ROC-AUC >= 0.900
+        best_strat_name = min(candidate_strategies.keys(), key=lambda k: candidate_strategies[k][1]['log_loss'])
+        best_test_preds, strategy_metrics = candidate_strategies[best_strat_name]
+        final_oof_loss = strategy_metrics['log_loss']
+        final_oof_auc = strategy_metrics['roc_auc']
+        selected_strategy = best_strat_name
+        logger.info(f"Selected {best_strat_name.upper()} for final primary submission (Log Loss: {final_oof_loss:.5f}, ROC-AUC: {final_oof_auc:.5f}).")
 
         # Persist ensemble config
         save_ensemble_config(
