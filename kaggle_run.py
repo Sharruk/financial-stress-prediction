@@ -455,7 +455,7 @@ def parse_args():
     )
     parser.add_argument("--cpu", action="store_true", help="Force CPU execution (disables GPU)")
     parser.add_argument("--gpu", action="store_true", default=True, help="Enable GPU training (default: True)")
-    parser.add_argument("--devices", type=str, default="0:1", help="GPU devices string (e.g. '0:1' for Kaggle T4 x 2, or '0')")
+    parser.add_argument("--devices", type=str, default="auto", help="GPU devices string (e.g. 'auto', '0:1' for Kaggle T4 x 2, or '0')")
     parser.add_argument("--smoke-only", action="store_true", help="Run only the smoke test and exit")
     parser.add_argument("--skip-smoke", action="store_true", help="Skip the smoke test and proceed directly to full training")
     parser.add_argument("--push-results", action="store_true", help="Commit and push experiment and submission artifacts to GitHub")
@@ -485,6 +485,21 @@ def main():
     # Step 2: System Diagnostics
     gpu_info = step2_system_diagnostics(gpu_mode=gpu_mode)
 
+    # Dynamic GPU device detection
+    if args.devices is None or args.devices.lower() == "auto":
+        if gpu_info["count"] >= 2:
+            effective_devices = "0:1"
+        elif gpu_info["count"] == 1:
+            effective_devices = "0"
+        else:
+            effective_devices = None
+    else:
+        # If user passed custom device string but only 1 GPU exists, guard against out-of-range indices
+        if gpu_info["count"] == 1 and ":" in args.devices:
+            effective_devices = "0"
+        else:
+            effective_devices = args.devices
+
     # Step 3: Install Requirements
     step3_install_requirements(repo_root)
 
@@ -497,7 +512,7 @@ def main():
 
     # Step 5: Smoke Test
     if not args.skip_smoke:
-        step5_run_smoke_test(repo_root, gpu_mode=gpu_mode, devices=args.devices)
+        step5_run_smoke_test(repo_root, gpu_mode=gpu_mode, devices=effective_devices)
         smoke_status = "PASS"
 
     # Step 6: Full Training
@@ -507,7 +522,7 @@ def main():
             models=args.models,
             folds=args.folds,
             gpu_mode=gpu_mode,
-            devices=args.devices,
+            devices=effective_devices,
             multi_seed=args.multi_seed
         )
         train_status = "PASS"
