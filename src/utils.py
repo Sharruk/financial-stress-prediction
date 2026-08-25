@@ -79,12 +79,56 @@ def evaluate_predictions(y_true, y_prob, threshold=0.5):
         "fn": int(fn)
     }
 
+LOSS_METRICS = {
+    "log_loss",
+    "brier_score",
+}
+
+SCORE_METRICS = {
+    "roc_auc",
+    "pr_auc",
+    "accuracy",
+    "precision",
+    "recall",
+    "f1",
+    "specificity",
+    "balanced_accuracy",
+    "mcc",
+}
+
 def calculate_generalization_gap(train_metrics, val_metrics):
-    """Calculate the generalization gap between train and validation metrics."""
+    """
+    Calculate the generalization gap between train and validation metrics.
+    
+    Convention: Positive gap indicates worse validation generalization (overfitting / high variance).
+    - For loss metrics (lower is better): Gap = Validation Loss - Training Loss
+    - For score metrics (higher is better): Gap = Training Score - Validation Score
+    - Confusion matrix counts (tp, tn, fp, fn) are explicitly excluded as count differences across
+      different sample sizes are mathematically meaningless.
+    """
+    if not isinstance(train_metrics, dict) or not isinstance(val_metrics, dict):
+        return {}
+
     gap = {}
-    for k in train_metrics:
-        if k in val_metrics and isinstance(train_metrics[k], float):
-            gap[k] = train_metrics[k] - val_metrics[k]
+    
+    # Loss metrics: Validation - Train
+    for k in LOSS_METRICS:
+        if k in train_metrics and k in val_metrics:
+            tr_val = train_metrics[k]
+            va_val = val_metrics[k]
+            if isinstance(tr_val, (int, float, np.number)) and isinstance(va_val, (int, float, np.number)):
+                if not (np.isnan(tr_val) or np.isnan(va_val)):
+                    gap[k] = float(va_val - tr_val)
+
+    # Score metrics: Train - Validation
+    for k in SCORE_METRICS:
+        if k in train_metrics and k in val_metrics:
+            tr_val = train_metrics[k]
+            va_val = val_metrics[k]
+            if isinstance(tr_val, (int, float, np.number)) and isinstance(va_val, (int, float, np.number)):
+                if not (np.isnan(tr_val) or np.isnan(va_val)):
+                    gap[k] = float(tr_val - va_val)
+
     return gap
 
 def format_and_save_submission(sub_df, sample_sub_df, output_dir, prefix="sub"):

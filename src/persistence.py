@@ -35,6 +35,8 @@ ENSEMBLE_CONFIG_FILENAME = "ensemble_config.json"
 # 1. Full-data feature preparation (mirrors fold TE from validation.py)
 # ------------------------------------------------------------------
 
+from src.features import fit_fold_unsupervised_personas, transform_fold_unsupervised_personas
+
 def prepare_full_features(train_fe: pd.DataFrame, test_fe: pd.DataFrame):
     """
     Compute target-encoding fit on the ENTIRE training set (no fold split),
@@ -78,6 +80,11 @@ def prepare_full_features(train_fe: pd.DataFrame, test_fe: pd.DataFrame):
         # Persist map so predict.py can apply it without labels
         te_maps[col] = {str(k): float(v) for k, v in te_dict.items()}
         te_maps[col]["__global_mean__"] = global_target_mean
+
+    # Fit KMeans personas on full training set
+    kmeans, scaler_params, avail_cols = fit_fold_unsupervised_personas(X_tr, n_clusters=8, seed=SEED)
+    X_tr = transform_fold_unsupervised_personas(X_tr, kmeans, scaler_params, avail_cols)
+    X_te = transform_fold_unsupervised_personas(X_te, kmeans, scaler_params, avail_cols)
 
     feature_cols = [
         c for c in X_tr.select_dtypes(include=[np.number]).columns
@@ -330,7 +337,12 @@ def refit_and_save_model(
     logger.info(
         f"Refitting {model_name.upper()} on full training data ({len(X_train_full)} rows)..."
     )
-    model = get_model(model_name, params=params)
+    refit_params = params.copy() if params else {}
+    if "early_stopping_rounds" in refit_params:
+        del refit_params["early_stopping_rounds"]
+    model = get_model(model_name, params=refit_params)
+    if hasattr(model, "early_stopping_rounds"):
+        model.set_params(early_stopping_rounds=None)
     X_arr = X_train_full.values if hasattr(X_train_full, "values") else X_train_full
     model.fit(X_arr, y_train)
     save_model(model, model_name, models_dir)

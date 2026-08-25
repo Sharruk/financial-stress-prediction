@@ -5,6 +5,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from api.dependencies import get_all_experiments
+from src.utils import calculate_generalization_gap
 
 st.title("Model Leaderboard")
 
@@ -36,7 +37,11 @@ else:
         # Add base models
         for bm in exp.get("_base_models", []):
             bm_metrics = bm.get("oof_metrics", {})
-            bm_gap = bm.get("generalization_gap", {})
+            train_metrics = bm.get("training_metrics", {})
+            if train_metrics and bm_metrics:
+                bm_gap = calculate_generalization_gap(train_metrics, bm_metrics)
+            else:
+                bm_gap = bm.get("generalization_gap", {})
             rows.append({
                 "Experiment": exp_id,
                 "Model": bm.get("name"),

@@ -25,20 +25,25 @@ def plot_generalization_gap(df):
     if df_clean.empty:
          return go.Figure().update_layout(title="Gap data not available")
          
-    df_clean["Color"] = df_clean["Generalization Gap"].apply(lambda x: "red" if x < 0 else "blue")
+    # Positive gap = overfitting (warning color); near zero = green; negative = blue
+    df_clean["Color"] = df_clean["Generalization Gap"].apply(
+        lambda x: "#EF553B" if x > 0.03 else ("#FFA15A" if x > 0.01 else ("#00CC96" if x >= 0 else "#636EFA"))
+    )
     
     fig = go.Figure(data=[
         go.Bar(
             name="Generalization Gap",
             x=df_clean["Model"],
             y=df_clean["Generalization Gap"],
-            marker_color=df_clean["Color"]
+            marker_color=df_clean["Color"],
+            text=df_clean["Generalization Gap"].apply(lambda x: f"{x:+.5f}"),
+            textposition="auto"
         )
     ])
     fig.update_layout(
-        title="Generalization Gap (Train Log Loss - Validation Log Loss)",
+        title="Generalization Gap (Validation Log Loss - Train Log Loss)",
         xaxis_title="Model",
-        yaxis_title="Gap"
+        yaxis_title="Gap (Positive = Overfitting)",
     )
     return fig
 

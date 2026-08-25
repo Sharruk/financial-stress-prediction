@@ -1,0 +1,90 @@
+{
+  "experiment_id": "EXP-20260820205331",
+  "timestamp": "2026-08-20T20:53:31",
+  "git_commit": "717680dfed545b76711f13c5550253475c9cab1c",
+  "model": "catboost",
+  "model_version": "v6_ultimate_grandmaster",
+  "feature_version": "v6",
+  "feature_count": 457,
+  "cv_folds": 5,
+  "hyperparameters": {
+    "CATBOOST": {
+      "iterations": 1800,
+      "learning_rate": 0.018
+    }
+  },
+  "training_metrics": null,
+  "validation_metrics": null,
+  "oof_metrics": {
+    "log_loss": 0.250925388620563,
+    "roc_auc": 0.9055723676470588
+  },
+  "generalization_gap": null,
+  "ensemble_information": {
+    "strategy": "single_model",
+    "weights": null
+  },
+  "training_time": null,
+  "status": "completed",
+  "notes": "Grand Master v6 Ultimate training run with 5-fold CV, CatBoost GPU, LightGBM GOSS, and Prior Calibration",
+  "_base_models": [
+    {
+      "name": "CATBOOST",
+      "params": {
+        "iterations": 1800,
+        "learning_rate": 0.018
+      },
+      "training_metrics": {
+        "log_loss": 0.1969080560985765,
+        "roc_auc": 0.9495042708333333,
+        "brier_score": 0.056433789626477396,
+        "pr_auc": 0.836840450887524,
+        "accuracy": 0.92609375,
+        "precision": 0.8868137375088129,
+        "recall": 0.5813750000000001,
+        "f1": 0.7022461815044216,
+        "specificity": 0.9869264705882351,
+        "balanced_accuracy": 0.7841507352941177,
+        "mcc": 0.6814412232870346,
+        "tp": 2790.6,
+        "tn": 26844.4,
+        "fp": 355.6,
+        "fn": 2009.4
+      },
+      "oof_metrics": {
+        "log_loss": 0.250925388620563,
+        "roc_auc": 0.9055723676470588,
+        "brier_score": 0.07550121334345512,
+        "pr_auc": 0.6990532411295611,
+        "accuracy": 0.8975,
+        "precision": 0.7591380250954719,
+        "recall": 0.4638333333333333,
+        "f1": 0.5758328160562798,
+        "specificity": 0.9740294117647059,
+        "balanced_accuracy": 0.7189313725490196,
+        "mcc": 0.5418764075659404,
+        "tp": 2783,
+        "tn": 33117,
+        "fp": 883,
+        "fn": 3217
+      },
+      "generalization_gap": {
+        "log_loss": -0.05401733252198651,
+        "roc_auc": 0.04393190318627449,
+        "brier_score": -0.019067423716977727,
+        "pr_auc": 0.13778720975796288,
+        "accuracy": 0.028593750000000084,
+        "precision": 0.12767571241334097,
+        "recall": 0.11754166666666677,
+        "f1": 0.12641336544814186,
+        "specificity": 0.012897058823529206,
+        "balanced_accuracy": 0.0652193627450981,
+        "mcc": 0.13956481572109425,
+        "tp": 7.599999999999909,
+        "tn": -6272.5999999999985,
+        "fp": -527.4,
+        "fn": -1207.6
+      }
+    }
+  ]
+}

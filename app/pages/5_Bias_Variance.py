@@ -6,13 +6,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from api.dependencies import get_all_experiments
 from app.components.charts import plot_generalization_gap
+from src.utils import calculate_generalization_gap
 
 st.title("Bias / Variance Diagnostics")
 
 st.markdown("""
-> **Note**: This is a diagnostic view showing the generalization gap (Train Metric - Validation Metric).
-> A large positive gap (e.g., Train loss is much lower than Validation loss) indicates potential overfitting / high variance.
-> Poor performance on both train and validation indicates potential underfitting / high bias.
+> **Diagnostic Guide**:
+> - **Loss Metrics (Log Loss, Brier)**: `Generalization Gap = Validation Loss - Training Loss`
+> - **Score Metrics (ROC-AUC, PR-AUC, F1)**: `Generalization Gap = Training Score - Validation Score`
+> 
+> A **positive gap** (Validation Loss > Train Loss or Train Score > Validation Score) indicates **overfitting / high variance**.
+> A **near-zero gap** with strong scores indicates **optimal generalization**.
+> Poor performance on both train and validation indicates **underfitting / high bias**.
 """)
 
 experiments = get_all_experiments()
@@ -25,10 +30,16 @@ else:
     
     rows = []
     for bm in latest.get("_base_models", []):
-        bm_gap = bm.get("generalization_gap", {})
+        train_metrics = bm.get("training_metrics", {})
+        oof_metrics = bm.get("oof_metrics", {})
+        if train_metrics and oof_metrics:
+            bm_gap = calculate_generalization_gap(train_metrics, oof_metrics)
+        else:
+            bm_gap = bm.get("generalization_gap", {})
+
         if bm_gap:
-            train_loss = bm.get("training_metrics", {}).get("log_loss")
-            val_loss = bm.get("oof_metrics", {}).get("log_loss")
+            train_loss = train_metrics.get("log_loss") if train_metrics else None
+            val_loss = oof_metrics.get("log_loss") if oof_metrics else None
             rows.append({
                 "Model": bm.get("name"),
                 "Train Log Loss": train_loss,

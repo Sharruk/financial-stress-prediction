@@ -60,7 +60,7 @@
     },
     "generalization_gap": {
       "type": ["object", "null"],
-      "description": "Diagnostic gap between training and validation metrics."
+      "description": "Diagnostic scalar performance gaps between train and validation (Loss: Val - Train, Scores: Train - Val). Positive values indicate overfitting / generalization penalty. Confusion matrix counts (tp, tn, fp, fn) are explicitly excluded."
     },
     "ensemble_information": {
       "type": ["object", "null"],
