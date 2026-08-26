@@ -27,3 +27,5 @@ data/submissions/zindi_stress_sub_*.zip
 models/*.pkl
 models/*.pt
 models/*.json
+models/autogluon_model/
+models/**
