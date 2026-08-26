@@ -56,14 +56,14 @@ def preprocess_fold_features(train_fold, val_fold, test_df, target_col, seed=SEE
     return X_tr[feature_cols], X_val[feature_cols], X_te[feature_cols]
 
 
-def train_cv_model(model_name, train_df, test_df, model_params=None, n_splits=N_SPLITS):
+def train_cv_model(model_name, train_df, test_df, model_params=None, n_splits=N_SPLITS, seed=SEED):
     """
     Train a model using Stratified K-Fold cross-validation.
     Returns OOF predictions, test predictions, fold metrics, and feature importances.
     """
-    logger.info(f"--- Running {n_splits}-Fold Stratified CV for {model_name.upper()} ---")
+    logger.info(f"--- Running {n_splits}-Fold Stratified CV for {model_name.upper()} (Seed: {seed}) ---")
 
-    skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=SEED)
+    skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=seed)
     oof_probs = np.zeros(len(train_df), dtype=np.float32)
     test_probs = np.zeros(len(test_df), dtype=np.float32)
 
@@ -78,7 +78,7 @@ def train_cv_model(model_name, train_df, test_df, model_params=None, n_splits=N_
         val_fold = train_df.iloc[val_idx]
 
         # Leak-free feature preprocessing per fold
-        X_tr, X_val, X_te = preprocess_fold_features(tr_fold, val_fold, test_df, TARGET_COL)
+        X_tr, X_val, X_te = preprocess_fold_features(tr_fold, val_fold, test_df, TARGET_COL, seed=seed)
         y_tr = tr_fold[TARGET_COL].values
         y_v = val_fold[TARGET_COL].values
 

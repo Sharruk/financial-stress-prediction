@@ -163,7 +163,7 @@ def main():
     seeds = [42, 1337, 2026] if args.multi_seed else [args.seed]
 
     logger.info("==========================================================")
-    logger.info("   ZINDI FINANCIAL STRESS PREDICTION - GRAND MASTER V6   ")
+    logger.info("   ZINDI FINANCIAL STRESS PREDICTION - GRAND MASTER V8   ")
     logger.info(f"   Mode: {'QUICK (10k sample)' if args.quick else 'FULL DATA (40,000 samples)'} | Folds: {n_splits} | Seeds: {seeds}")
     logger.info("==========================================================")
 
@@ -175,7 +175,7 @@ def main():
         train_df = train_df.sample(n=10000, random_state=args.seed).reset_index(drop=True)
 
     # 2. Engineer Features
-    logger.info("Running Grand Master v6 Feature Engineering Pipeline on Train and Test...")
+    logger.info("Running Grand Master v8 Feature Engineering Pipeline on Train and Test...")
     train_fe = engineer_features(train_df)
     test_fe = engineer_features(test_df)
 
@@ -234,7 +234,7 @@ def main():
                 elif m_name == 'catboost':
                     s_params['random_seed'] = s
                     
-                results = train_cv_model(m_name, train_fe, test_fe, model_params=s_params, n_splits=n_splits)
+                results = train_cv_model(m_name, train_fe, test_fe, model_params=s_params, n_splits=n_splits, seed=s)
                 seed_oofs.append(results['oof_probs'])
                 seed_tests.append(results['test_probs'])
                 seed_fold_scores.append(results['fold_scores'])
