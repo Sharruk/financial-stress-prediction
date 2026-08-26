@@ -1,21 +1,37 @@
 # Kaggle Quick Workflow Guide
 
-This document outlines the standard collaborative training and submission workflow between local environments (WSL) and Kaggle GPU instances for the Financial Stress Prediction project.
+This document defines the standard end-to-end workflow for running machine learning training on Kaggle GPU instances, synchronizing results via Git on the `nat` branch, and preparing final submissions for Zindi.
+
+---
+
+## Important Context & Principles
+
+- **Branch:** We use the `nat` branch for all active ML development and Kaggle training.
+- **Compute:** We do **not** run heavy ML training locally on WSL (laptops are not suitable for full training). Heavy training is always executed on Kaggle GPU.
+- **Authentication:** SSH and GitHub authentication are already configured on both WSL and Kaggle.
+- **Workflow Cycle:** 
+  1. Collaborator pushes changes to `nat`
+  2. Pull changes locally on WSL
+  3. Pull changes into Kaggle and train on GPU
+  4. Validate metrics and submission artifact
+  5. Push generated results back to `nat` from Kaggle
+  6. Pull results back into local WSL
+  7. Submit `data/submissions/submission.csv` to Zindi
 
 ---
 
 ## Workflow Steps
 
-### 1. Friend Pushes New Changes to `nat`
-- Your collaborator pushes code updates, feature engineering scripts, or model configurations to the `nat` branch on GitHub.
+### 1. Friend Pushes Changes
+Collaborator pushes the latest ML model changes, feature engineering, or pipeline updates to:
+```
+nat
+```
 
 ---
 
-### 2. Local WSL Terminal
-Synchronize your local environment with the latest changes from the `nat` branch:
-- Switch to the `nat` branch.
-- Pull updates using fast-forward only.
-- Check the Git status and confirm the latest commit hash and message.
+### 2. Local WSL — Get Latest Code
+Synchronize your local WSL repository with the latest remote changes:
 
 ```bash
 git switch nat
@@ -24,65 +40,111 @@ git status
 git log -1 --oneline
 ```
 
+> **Why `--ff-only`?**  
+> `--ff-only` ensures Git will only fast-forward if the local branch can be updated cleanly without creating a merge commit. This prevents accidental merge commits while synchronizing branch state.
+
 ---
 
-### 3. Open Kaggle
-In your Kaggle notebook or terminal instance with GPU acceleration enabled:
+### 3. Kaggle — Get Latest `nat`
 
-- Pull the latest `nat` branch updates.
-- Verify the active commit matches your local/remote commit.
-- Execute the training orchestration pipeline via [kaggle_run.py](file:///d:/Visual_Studio_Code/ML_Hackathons/financial-stress-prediction/kaggle_run.py).
-
-#### Option A: Kaggle Terminal / Bash
+#### If the repository already exists on Kaggle:
 ```bash
+cd /kaggle/working/financial-stress-prediction
+git switch nat
 git pull --ff-only origin nat
 git log -1 --oneline
+```
+
+#### If the repository does not exist on Kaggle:
+```bash
+git clone -b nat git@github.com:Sharruk/financial-stress-prediction.git
+cd /kaggle/working/financial-stress-prediction
+git log -1 --oneline
+```
+
+> **Verify Commit:** Confirm that the latest commit displayed by `git log -1 --oneline` on Kaggle matches the commit hash pulled on your local WSL terminal.
+
+---
+
+### 4. Kaggle — Train
+
+Run the repository's training runner script [kaggle_run.py](file:///d:/Visual_Studio_Code/ML_Hackathons/financial-stress-prediction/kaggle_run.py):
+
+#### Terminal:
+```bash
 python kaggle_run.py
 ```
 
-#### Option B: Kaggle Notebook Cell Syntax
+#### Kaggle Notebook Cell:
 ```python
-!git pull --ff-only origin nat
-!git log -1 --oneline
 !python kaggle_run.py
 ```
 
----
-
-### 4. After Training Finishes on Kaggle
-- Verify that `data/submissions/submission.csv` has been generated and validated (shape: 30000 rows, no NaNs/Infs, valid probability range `[0, 1]`).
-- Check the generated experiment record JSON and OOF evaluation metrics in `experiments/`.
-- Confirm that the run finished with `[SUCCESS]` before taking further action.
-- Do **not** re-run training unnecessarily.
+> **IMPORTANT: Avoiding Accidental Double Training**  
+> In [kaggle_run.py](file:///d:/Visual_Studio_Code/ML_Hackathons/financial-stress-prediction/kaggle_run.py), the `--push-results` flag is an end-to-end execution argument that executes full model training before pushing. Running `python kaggle_run.py --push-results` *after* running `python kaggle_run.py` will execute the entire training pipeline a second time.  
+> **Never run `python kaggle_run.py --push-results` immediately after training.** Follow the safe manual Git push procedure in Step 6 instead.
 
 ---
 
-### 5. Push Kaggle Results Back to `nat`
-Check the git status and use the repository's built-in push mechanism to commit and push generated submission and experiment files:
+### 5. Kaggle — Validate Results
 
-#### Check Status & Commit
+After training completes successfully, inspect the generated artifacts:
+
 ```bash
 git status
-git log -1 --oneline
 ```
 
-#### Push Results via `kaggle_run.py`
-```bash
-python kaggle_run.py --push-results
-```
-*(In a Kaggle Notebook cell: `!python kaggle_run.py --push-results`)*
+Check the generated files in:
+- `data/submissions/submission.csv`
+- `experiments/`
 
-> **Note (Manual Git Fallback):** If pushing manually:
-> ```bash
-> git add data/submissions/submission.csv experiments/
-> git commit -m "Kaggle Run Results [$(date '+%Y-%m-%d %H:%M:%S')]"
-> git push origin nat
-> ```
+#### Submission File Validation Requirements:
+- Exactly 30,000 prediction rows + 1 header row (30,001 lines total)
+- Columns: `ID,Target`
+- No `NaN` values
+- No infinite (`inf`) values
+- Target probabilities strictly bounded between `0.0` and `1.0`
+
+#### Model Performance Metrics:
+Inspect the experiment JSON record and out-of-fold predictions in `experiments/`. The primary evaluation metrics to verify are:
+- **Log Loss** (competition primary optimization metric)
+- **ROC-AUC** (discrimination quality)
+
+Do not focus solely on column names; ensure the model metrics reflect a valid, convergent training run.
 
 ---
 
-### 6. Return to Local WSL Terminal
-Pull the Kaggle-generated submission and experiment records into your local WSL repository:
+### 6. Kaggle — Push Results
+
+Use the safe Git procedure to stage only the generated submission and experiment files:
+
+```bash
+git status
+
+git add data/submissions/submission.csv experiments/
+
+git status
+
+git commit -m "Kaggle Run Results"
+
+git push origin nat
+```
+
+> **Warning Regarding `git add .`:**  
+> Do **NOT** use `git add .` unless you have run `git status` and verified every untracked/modified file.  
+> **Never commit or push:**
+> - SSH private/public keys
+> - GitHub personal access tokens
+> - Kaggle API secrets or environment credentials
+> - Python virtual environment / pip caches (`.cache/`, `__pycache__/`)
+> - CatBoost temporary logging directories (`catboost_info/`)
+> - Unrelated scratch scripts or large temporary data files
+
+---
+
+### 7. Local WSL — Pull Kaggle Results
+
+Once Kaggle has successfully pushed to GitHub, return to your local WSL terminal to pull the new submission and experiment records:
 
 ```bash
 git switch nat
@@ -93,35 +155,39 @@ git log -1 --oneline
 
 ---
 
-### 7. Final Submission
-The final competition submission file is:
+### 8. Final Submission
 
+The final competition submission file is:
 ```
 data/submissions/submission.csv
 ```
 
-Verify that the file exists and is populated locally before uploading to the Zindi competition platform.
+- Upload this file directly to the Zindi competition submission page.
+- **Do not manually edit or modify** the generated `submission.csv` file (e.g. changing column names, re-saving through Excel, or altering probability values), as this can corrupt formatting or probability calibration.
 
 ---
 
-## 8. Important Rules
+## 9. Git & Workflow Safety Rules
 
-- **No Local Heavy Compute:** Never run expensive training locally; always leverage Kaggle GPUs.
-- **Pull Before Training:** Always pull the latest `nat` branch before starting a Kaggle run.
-- **Verify Commit:** Always verify the active commit hash before launching training.
-- **Wait for Completion:** Always let the training run to full completion before attempting to export artifacts.
-- **Inspect Artifacts:** Always inspect the generated validation metrics and submission file prior to pushing.
-- **Sync Back Locally:** Always pull Kaggle results back to the local terminal to maintain full version control.
-- **Target Submission:** Submit the final `data/submissions/submission.csv` to Zindi.
-- **No Force Pushes:** Do not use `git push --force` or `--force-with-lease`.
-- **No Destructive Commands:** Do not run destructive Git commands like `git reset --hard` unless explicitly instructed.
-- **Security & Cleanliness:** Never commit SSH keys, tokens, credentials, virtualenv caches, or temporary files.
+1. **Always work on `nat`:** All development, testing, and Kaggle training runs stay on the `nat` branch.
+2. **Pull before training:** Always pull latest `nat` updates with `--ff-only` before starting a Kaggle training run.
+3. **Verify commit hash:** Check `git log -1 --oneline` on Kaggle to ensure it matches local WSL.
+4. **No heavy local training:** Keep your local machine responsive; run heavy compute exclusively on Kaggle GPU.
+5. **Never force-push:** Avoid `git push --force` or `git push -f` under all circumstances.
+6. **No casual hard resets:** Do not run `git reset --hard` unless intentionally discarding uncommitted scratch work.
+7. **Never commit secrets or tokens:** Keep credentials, keys, and tokens out of the repository.
+8. **No blind `git add .`:** Stage specific artifact paths (`data/submissions/submission.csv`, `experiments/`).
+9. **Do not train twice accidentally:** Do not run `kaggle_run.py --push-results` after already running `kaggle_run.py`.
+10. **Do not push partial or failed runs:** Only commit when training completes with `[SUCCESS]` and metrics pass validation.
+11. **Always wait for training completion:** Allow all folds and seeds to finish before attempting export.
+12. **Always validate submission & metrics:** Check row count, probability bounds, Log Loss, and ROC-AUC before pushing.
+13. **Always pull back to WSL:** Keep the local WSL repository in sync with the latest Kaggle experiment results.
 
 ---
 
-## QUICK COPY-PASTE FLOW
+## 10. Quick Copy-Paste Section
 
-### LOCAL:
+### LOCAL (WSL) — Before Training:
 ```bash
 git switch nat
 git pull --ff-only origin nat
@@ -129,22 +195,36 @@ git status
 git log -1 --oneline
 ```
 
-### KAGGLE:
+### KAGGLE — Pull & Train:
 ```bash
+cd /kaggle/working/financial-stress-prediction
+git switch nat
 git pull --ff-only origin nat
 git log -1 --oneline
 python kaggle_run.py
-python kaggle_run.py --push-results
 ```
 
-### LOCAL:
+### KAGGLE — Validate & Push Results:
 ```bash
+git status
+ls -lh data/submissions/submission.csv
+ls -lh experiments/
+
+git add data/submissions/submission.csv experiments/
+git status
+git commit -m "Kaggle Run Results"
+git push origin nat
+```
+
+### LOCAL (WSL) — After Kaggle Push:
+```bash
+git switch nat
 git pull --ff-only origin nat
 git status
 git log -1 --oneline
 ```
 
-### Submit:
+### FINAL SUBMISSION FILE:
 ```
 data/submissions/submission.csv
 ```
