@@ -283,6 +283,38 @@ def step6_run_full_training(
     return True
 
 
+def step6b_run_autogluon_training(
+    repo_root: Path,
+    time_limit: int,
+    gpu_mode: bool,
+    presets: str = "best_quality",
+    stack_levels: int = 2,
+    bag_folds: int = 10
+) -> bool:
+    print("\n==========================================================")
+    print(f" [2/2] RUNNING AUTOGLUON MULTI-LAYER STACKING ({presets.upper()})")
+    print(f" Time Limit: {time_limit}s | Stack Levels: {stack_levels} | Bag Folds: {bag_folds}")
+    print("==========================================================")
+
+    cmd = [
+        sys.executable, "autogluon_train.py",
+        "--time-limit", str(time_limit),
+        "--presets", presets,
+        "--stack-levels", str(stack_levels),
+        "--bag-folds", str(bag_folds)
+    ]
+    if gpu_mode:
+        cmd.append("--gpu")
+
+    proc = run_command(cmd, f"Executing AutoGluon training: {' '.join(cmd)}", cwd=repo_root, check=False)
+    if proc.returncode != 0:
+        print(f"\n[ERROR] AutoGluon training failed with exit code {proc.returncode}!", file=sys.stderr)
+        sys.exit(proc.returncode)
+
+    print("[SUCCESS] AutoGluon multi-layer stacking completed successfully.")
+    return True
+
+
 # ==============================================================================
 # STEP 7: Verify Output Artifacts
 # ==============================================================================
@@ -468,6 +500,8 @@ def parse_args():
     )
     parser.add_argument("--multi-seed", action="store_true", default=True, help="Enable multi-seed bagging [42, 1337, 2026] (default: True)")
     parser.add_argument("--single-seed", dest="multi_seed", action="store_false", help="Disable multi-seed bagging (run single seed)")
+    parser.add_argument("--autogluon", action="store_true", help="Run AutoGluon multi-layer stacking instead of standard train.py")
+    parser.add_argument("--time-limit", type=int, default=3600, help="Time limit for AutoGluon in seconds (default: 3600 / 1 hr)")
     return parser.parse_args()
 
 
@@ -517,15 +551,26 @@ def main():
 
     # Step 6: Full Training
     if not args.smoke_only:
-        step6_run_full_training(
-            repo_root,
-            models=args.models,
-            folds=args.folds,
-            gpu_mode=gpu_mode,
-            devices=effective_devices,
-            multi_seed=args.multi_seed
-        )
-        train_status = "PASS"
+        if args.autogluon:
+            step6b_run_autogluon_training(
+                repo_root,
+                time_limit=args.time_limit,
+                gpu_mode=gpu_mode,
+                presets="best_quality",
+                stack_levels=2,
+                bag_folds=args.folds
+            )
+            train_status = "PASS (AutoGluon Multi-Layer Stacking)"
+        else:
+            step6_run_full_training(
+                repo_root,
+                models=args.models,
+                folds=args.folds,
+                gpu_mode=gpu_mode,
+                devices=effective_devices,
+                multi_seed=args.multi_seed
+            )
+            train_status = "PASS (GBDT Multi-Seed Ensemble)"
 
         # Step 7: Verify Output Artifacts
         artifacts = step7_verify_artifacts(repo_root)
