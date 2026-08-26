@@ -8,30 +8,34 @@ from src.utils import evaluate_predictions, get_logger
 
 logger = get_logger()
 
-def calibrate_temperature(y_true, oof_probs, initial_temp=1.03):
+def calibrate_joint_logodds(y_true, oof_probs, train_prior=0.1500):
     """
-    Find optimal temperature parameter T minimizing Log Loss on OOF predictions.
-    P_calibrated = Sigmoid(logit(P) / T)
-    Softens overconfident probability extremes to protect against Log Loss blowouts.
+    Jointly solves for optimal Temperature (T) and Log-Odds shift (delta) using Nelder-Mead:
+    P_cal = clip(expit((logit(P) + delta) / T), 0.003, 0.990)
+    Directly minimizes out-of-fold Log Loss while simultaneously preserving strict ROC-AUC rank order.
     """
     eps = 1e-6
     raw_logits = logit(np.clip(oof_probs, eps, 1.0 - eps))
     
-    def temp_loss(T):
-        scaled_probs = expit(raw_logits / T[0])
+    def loss_fn(params):
+        T, delta = params
+        T = max(0.2, T)
+        scaled_probs = np.clip(expit((raw_logits + delta) / T), 0.003, 0.990)
         metrics = evaluate_predictions(y_true, scaled_probs)
-        return metrics['log_loss']
+        prior_pen = 2.0 * (np.mean(scaled_probs) - train_prior) ** 2
+        return metrics['log_loss'] + prior_pen
         
-    res = minimize(temp_loss, [initial_temp], method='Nelder-Mead', bounds=[(0.5, 2.0)])
-    best_temp = float(res.x[0])
-    logger.info(f"Optimal Temperature Parameter T: {best_temp:.4f}")
-    return best_temp
+    res = minimize(loss_fn, [1.0, 0.0], method='Nelder-Mead')
+    best_T, best_delta = float(res.x[0]), float(res.x[1])
+    logger.info(f"Optimal Joint Calibration: T={best_T:.4f}, delta={best_delta:.4f}")
+    return best_T, best_delta
 
-def apply_temperature_scaling(probs, temp):
-    """Apply temperature scaling to probability vector."""
+def apply_joint_calibration(probs, T, delta, lower_clip=0.003, upper_clip=0.990):
+    """Apply joint temperature scaling, prior shift, and asymmetric probability clamping."""
     eps = 1e-6
     raw_logits = logit(np.clip(probs, eps, 1.0 - eps))
-    return expit(raw_logits / temp)
+    calibrated = expit((raw_logits + delta) / T)
+    return np.clip(calibrated, lower_clip, upper_clip)
 
 from sklearn.isotonic import IsotonicRegression
 

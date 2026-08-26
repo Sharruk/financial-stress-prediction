@@ -7,15 +7,12 @@ DATA_DIR = BASE_DIR / "data"
 RAW_DATA_DIR = DATA_DIR / "raw"
 PROCESSED_DATA_DIR = DATA_DIR / "processed"
 SUBMISSION_DIR = DATA_DIR / "submissions"
-SUBMISSIONS_DIR = SUBMISSION_DIR
 MODELS_DIR = BASE_DIR / "models"
-EXPERIMENTS_DIR = BASE_DIR / "experiments"
 
 # Ensure directories exist
 PROCESSED_DATA_DIR.mkdir(parents=True, exist_ok=True)
 SUBMISSION_DIR.mkdir(parents=True, exist_ok=True)
 MODELS_DIR.mkdir(parents=True, exist_ok=True)
-EXPERIMENTS_DIR.mkdir(parents=True, exist_ok=True)
 
 TRAIN_PATH = RAW_DATA_DIR / "Train.csv"
 TEST_PATH = RAW_DATA_DIR / "Test.csv"

@@ -196,12 +196,8 @@ STEP 8: LEADERBOARD METRICS & MATHEMATICAL GAP ANALYSIS
 ================================================================================
 STEP 9: EXECUTION GUIDE (KAGGLE GPU & LOCAL EXECUTION)
 ================================================================================
-1. Kaggle Execution Options:
-   Option A (Ultra-Fast 3-Model GPU Ensemble):
-   $ python kaggle_run.py --gpu --multi-seed --push-results
-
-   Option B (AutoGluon Multi-Layer Stacking - Alexander Pfefferle Method):
-   $ python kaggle_run.py --autogluon --time-limit 3600 --push-results
+1. Kaggle Execution (for Friend / Cloud GPU):
+   $ python kaggle_run.py --gpu --devices 0:1 --multi-seed --push-results
 
 2. Local Laptop Training on NVIDIA GeForce RTX 3050 GPU:
    $ python train.py
