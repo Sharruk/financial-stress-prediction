@@ -49,18 +49,18 @@ def compute_gini(array_2d):
 
 def engineer_features(data_df):
     """
-    Grand Master v7 Ultimate Feature Engineering Pipeline (~520 high-signal features).
-    Extracts financial physics, exponential moving averages (EMA), cashflow elasticity,
-    peak drawdown, liquidity exhaustion countdown, behavioral personas, and panic indicators.
+    Grand Master v8 High-Precision Feature Engineering Pipeline.
+    Extracts micro-economic liquidity collapse dynamics, personal historical Z-scores,
+    emergency cash drain spikes, cashflow elasticity, and compound interaction manifolds.
     """
-    logger.info("Starting Grand Master feature engineering pipeline...")
+    logger.info("Starting Grand Master v8 feature engineering pipeline...")
     df = data_df.copy()
     new_cols = {}
     
     # -------------------------------------------------------------
-    # 1. Profile, Compound Interactions & Peer Benchmarks
+    # 1. Profile, Compound Interactions & Multi-Way Groupings
     # -------------------------------------------------------------
-    logger.info("Computing profile, cross-interactions & peer benchmarks...")
+    logger.info("Computing profile, compound interactions & peer benchmarks...")
     new_cols['arpu_per_age'] = df['arpu'] / (df['age'] + 1.0)
     new_cols['activity_per_age'] = df['x_90_d_activity_rate'] / (df['age'] + 1.0)
     new_cols['arpu_activity_interact'] = df['arpu'] * df['x_90_d_activity_rate']
@@ -122,9 +122,9 @@ def engineer_features(data_df):
         new_cols[f'm1_bal_pct_in_{group_col}'] = df.groupby(col_to_group)['m1_daily_avg_bal'].rank(pct=True).astype(np.float32)
 
     # -------------------------------------------------------------
-    # 2. Balance Trajectory, Physics Dynamics & Drawdown
+    # 2. Balance Trajectory, Personal Z-Score & Drawdown Dynamics
     # -------------------------------------------------------------
-    logger.info("Computing balance physics, EMA, acceleration & peak drawdown...")
+    logger.info("Computing balance physics, EMA, personal Z-score & peak drawdown...")
     bal_matrix = df[BALANCE_COLS[::-1]].values.astype(np.float32)
     
     new_cols['bal_slope'] = compute_linear_slope(bal_matrix)
@@ -190,9 +190,9 @@ def engineer_features(data_df):
     new_cols['consecutive_bal_drops_count'] = bal_drops
 
     # -------------------------------------------------------------
-    # 3. Monthly Inflows, Outflows & Cashflow Elasticity
+    # 3. Monthly Inflows, Outflows & Emergency Cash Drain Spikes
     # -------------------------------------------------------------
-    logger.info("Computing monthly cashflow dynamics, elasticity & panic signals...")
+    logger.info("Computing monthly cashflow dynamics, velocity & emergency spikes...")
     m_inflows = []
     m_outflows = []
     m_nets = []

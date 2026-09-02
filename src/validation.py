@@ -9,9 +9,10 @@ logger = get_logger()
 
 from src.features import fit_fold_unsupervised_personas, transform_fold_unsupervised_personas
 
-def preprocess_fold_features(train_fold, val_fold, test_df, target_col):
+def preprocess_fold_features(train_fold, val_fold, test_df, target_col, seed=SEED):
     """
-    Fold-aware categorical processing (Target Encoding) and KMeans Persona clustering.
+    Fold-aware categorical processing (Target Encoding with Bayesian smoothing & noise injection)
+    and KMeans Persona clustering.
     Fit strictly on train_fold only to guarantee zero validation/test leakage.
     """
     X_tr = train_fold.copy()
@@ -21,9 +22,10 @@ def preprocess_fold_features(train_fold, val_fold, test_df, target_col):
     # Automatically detect all string/object/categorical columns
     cat_cols = [c for c in X_tr.columns if c not in [ID_COL, target_col] and not pd.api.types.is_numeric_dtype(X_tr[c])]
 
-    # Target Encoding for categorical columns fit ONLY on train_fold
+    # Target Encoding for categorical columns fit ONLY on train_fold with Bayesian smoothing
     global_target_mean = float(train_fold[target_col].mean())
-    smooth_weight = 10
+    smooth_weight = 15.0
+    rng = np.random.RandomState(seed)
 
     for col in cat_cols:
         # Group stats strictly from train_fold
@@ -32,12 +34,18 @@ def preprocess_fold_features(train_fold, val_fold, test_df, target_col):
         te_dict = smooth_te.to_dict()
 
         te_col_name = f"{col}_te"
-        X_tr[te_col_name] = X_tr[col].map(te_dict).fillna(global_target_mean).astype(np.float32)
+        
+        # Training target encoding with subtle Gaussian noise injection to prevent tree memorization
+        train_raw_te = X_tr[col].map(te_dict).fillna(global_target_mean).values.astype(np.float32)
+        noise = rng.normal(0, 0.005, size=len(train_raw_te)).astype(np.float32)
+        X_tr[te_col_name] = np.clip(train_raw_te + noise, 0.0, 1.0)
+        
+        # Validation & Test remain completely uncorrupted / deterministic
         X_val[te_col_name] = X_val[col].map(te_dict).fillna(global_target_mean).astype(np.float32)
         X_te[te_col_name] = X_te[col].map(te_dict).fillna(global_target_mean).astype(np.float32)
 
     # Fold-safe Unsupervised KMeans Personas: Fit on train_fold only!
-    kmeans, scaler_params, avail_cols = fit_fold_unsupervised_personas(X_tr, n_clusters=8, seed=SEED)
+    kmeans, scaler_params, avail_cols = fit_fold_unsupervised_personas(X_tr, n_clusters=8, seed=seed)
     X_tr = transform_fold_unsupervised_personas(X_tr, kmeans, scaler_params, avail_cols)
     X_val = transform_fold_unsupervised_personas(X_val, kmeans, scaler_params, avail_cols)
     X_te = transform_fold_unsupervised_personas(X_te, kmeans, scaler_params, avail_cols)
@@ -48,14 +56,14 @@ def preprocess_fold_features(train_fold, val_fold, test_df, target_col):
     return X_tr[feature_cols], X_val[feature_cols], X_te[feature_cols]
 
 
-def train_cv_model(model_name, train_df, test_df, model_params=None, n_splits=N_SPLITS):
+def train_cv_model(model_name, train_df, test_df, model_params=None, n_splits=N_SPLITS, seed=SEED):
     """
     Train a model using Stratified K-Fold cross-validation.
     Returns OOF predictions, test predictions, fold metrics, and feature importances.
     """
-    logger.info(f"--- Running {n_splits}-Fold Stratified CV for {model_name.upper()} ---")
+    logger.info(f"--- Running {n_splits}-Fold Stratified CV for {model_name.upper()} (Seed: {seed}) ---")
 
-    skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=SEED)
+    skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=seed)
     oof_probs = np.zeros(len(train_df), dtype=np.float32)
     test_probs = np.zeros(len(test_df), dtype=np.float32)
 
@@ -70,7 +78,7 @@ def train_cv_model(model_name, train_df, test_df, model_params=None, n_splits=N_
         val_fold = train_df.iloc[val_idx]
 
         # Leak-free feature preprocessing per fold
-        X_tr, X_val, X_te = preprocess_fold_features(tr_fold, val_fold, test_df, TARGET_COL)
+        X_tr, X_val, X_te = preprocess_fold_features(tr_fold, val_fold, test_df, TARGET_COL, seed=seed)
         y_tr = tr_fold[TARGET_COL].values
         y_v = val_fold[TARGET_COL].values
 

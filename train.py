@@ -163,7 +163,7 @@ def main():
     seeds = [42, 1337, 2026] if args.multi_seed else [args.seed]
 
     logger.info("==========================================================")
-    logger.info("   ZINDI FINANCIAL STRESS PREDICTION - GRAND MASTER V6   ")
+    logger.info("   ZINDI FINANCIAL STRESS PREDICTION - GRAND MASTER V8   ")
     logger.info(f"   Mode: {'QUICK (10k sample)' if args.quick else 'FULL DATA (40,000 samples)'} | Folds: {n_splits} | Seeds: {seeds}")
     logger.info("==========================================================")
 
@@ -175,7 +175,7 @@ def main():
         train_df = train_df.sample(n=10000, random_state=args.seed).reset_index(drop=True)
 
     # 2. Engineer Features
-    logger.info("Running Grand Master v6 Feature Engineering Pipeline on Train and Test...")
+    logger.info("Running Grand Master v8 Feature Engineering Pipeline on Train and Test...")
     train_fe = engineer_features(train_df)
     test_fe = engineer_features(test_df)
 
@@ -234,7 +234,7 @@ def main():
                 elif m_name == 'catboost':
                     s_params['random_seed'] = s
                     
-                results = train_cv_model(m_name, train_fe, test_fe, model_params=s_params, n_splits=n_splits)
+                results = train_cv_model(m_name, train_fe, test_fe, model_params=s_params, n_splits=n_splits, seed=s)
                 seed_oofs.append(results['oof_probs'])
                 seed_tests.append(results['test_probs'])
                 seed_fold_scores.append(results['fold_scores'])
@@ -339,13 +339,6 @@ def main():
         calibrated_metrics = evaluate_predictions(y_true, calibrated_blend_oof)
         logger.info(f"==> CALIBRATED BLEND (T={opt_temp:.3f})   | Log Loss: {calibrated_metrics['log_loss']:.5f} | ROC-AUC: {calibrated_metrics['roc_auc']:.5f} <==")
 
-        # Isotonic Regression Calibration on Blended Probabilities
-        from src.ensemble import fit_isotonic_calibrator, apply_isotonic_scaling
-        iso_cal, iso_oof = fit_isotonic_calibrator(y_true, blend_oof)
-        iso_test = apply_isotonic_scaling(iso_cal, blend_test)
-        iso_metrics = evaluate_predictions(y_true, iso_oof)
-        logger.info(f"==> ISOTONIC CALIBRATED BLEND OOF | Log Loss: {iso_metrics['log_loss']:.5f} | ROC-AUC: {iso_metrics['roc_auc']:.5f} <==")
-
         # Logit Space Blend
         logit_oof, logit_test = compute_logit_blend(oof_dict, test_dict, best_weights)
         logit_metrics = evaluate_predictions(y_true, logit_oof)
@@ -362,8 +355,7 @@ def main():
         # Select best calibrated strategy for primary submission
         candidate_strategies = {
             "calibrated_blend": (calibrated_blend_test, calibrated_metrics),
-            "logit_blend": (logit_test, logit_metrics),
-            "isotonic_blend": (iso_test, iso_metrics)
+            "logit_blend": (logit_test, logit_metrics)
         }
         
         # Sort by lowest Log Loss with ROC-AUC >= 0.900
