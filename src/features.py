@@ -134,11 +134,6 @@ def engineer_features(data_df):
     new_cols['bal_max'] = np.max(bal_matrix, axis=1)
     new_cols['bal_cv'] = new_cols['bal_std'] / (new_cols['bal_mean'] + 1.0)
     
-    # Personal Balance Historical Z-Score (Standard Deviations dropped from personal baseline)
-    new_cols['bal_user_zscore_m1'] = (df['m1_daily_avg_bal'] - new_cols['bal_mean']) / (new_cols['bal_std'] + 1.0)
-    new_cols['bal_user_zscore_m2'] = (df['m2_daily_avg_bal'] - new_cols['bal_mean']) / (new_cols['bal_std'] + 1.0)
-    new_cols['bal_user_zscore_drop'] = new_cols['bal_user_zscore_m1'] - new_cols['bal_user_zscore_m2']
-    
     # Peak-to-Trough Historical Maximum Drawdown
     new_cols['bal_max_drawdown_ratio'] = (new_cols['bal_max'] - df['m1_daily_avg_bal']) / (new_cols['bal_max'] + 1.0)
     new_cols['bal_drawdown_severity'] = (new_cols['bal_max'] - new_cols['bal_min']) / (new_cols['bal_mean'] + 1.0)
@@ -255,23 +250,6 @@ def engineer_features(data_df):
     outflow_std = np.std(outflow_matrix, axis=1) + 1e-5
     elasticity = np.mean(inflow_mat_norm * outflow_mat_norm, axis=1) / (inflow_std * outflow_std)
     new_cols['inflow_outflow_elasticity'] = np.clip(elasticity, -1.0, 1.0)
-
-    # Emergency Cash Drain Spike Ratios (M1 surge in cash extraction)
-    m1_emerg = (df['m1_withdraw_total_value'] if 'm1_withdraw_total_value' in df.columns else 0) + \
-               (df['m1_transfer_from_bank_total_value'] if 'm1_transfer_from_bank_total_value' in df.columns else 0)
-    m2_emerg = (df['m2_withdraw_total_value'] if 'm2_withdraw_total_value' in df.columns else 0) + \
-               (df['m2_transfer_from_bank_total_value'] if 'm2_transfer_from_bank_total_value' in df.columns else 0)
-    m3_emerg = (df['m3_withdraw_total_value'] if 'm3_withdraw_total_value' in df.columns else 0) + \
-               (df['m3_transfer_from_bank_total_value'] if 'm3_transfer_from_bank_total_value' in df.columns else 0)
-    new_cols['emergency_cash_spike_m1_m2'] = m1_emerg / (m2_emerg + 1.0)
-    new_cols['emergency_cash_spike_m1_m3'] = m1_emerg / (m3_emerg + 1.0)
-
-    # Inflow/Outflow Multi-Month Velocity Ratios
-    new_cols['outflow_ratio_m1_m2'] = new_cols['m1_outflow_total'] / (new_cols['m2_outflow_total'] + 1.0)
-    new_cols['outflow_ratio_m1_m3'] = new_cols['m1_outflow_total'] / (new_cols['m3_outflow_total'] + 1.0)
-    new_cols['outflow_ratio_m1_m6'] = new_cols['m1_outflow_total'] / (new_cols['m6_outflow_total'] + 1.0)
-    new_cols['inflow_ratio_m1_m2'] = new_cols['m1_inflow_total'] / (new_cols['m2_inflow_total'] + 1.0)
-    new_cols['inflow_ratio_m1_m3'] = new_cols['m1_inflow_total'] / (new_cols['m3_inflow_total'] + 1.0)
 
     # Multi-month inflow/outflow velocity differences and accelerations
     for i in range(1, 6):
@@ -426,8 +404,7 @@ def engineer_features(data_df):
         (new_cols['total_zero_activity_m1'] * 0.25) +
         (new_cols['inflow_collapse_flag'] * 0.2) +
         (new_cols['exhaustion_under_30d_flag'] * 0.2) +
-        (new_cols['bal_max_drawdown_ratio'] * 0.2) +
-        (new_cols['emergency_cash_spike_m1_m2'] * 0.15)
+        (new_cols['bal_max_drawdown_ratio'] * 0.2)
     )
     new_cols['composite_stress_index'] = stress_idx
     
@@ -438,7 +415,7 @@ def engineer_features(data_df):
     num_cols = df.select_dtypes(include=[np.number]).columns
     df[num_cols] = df[num_cols].replace([np.inf, -np.inf], np.nan).fillna(0.0)
     
-    logger.info(f"Grand Master v8 Feature engineering completed! Total columns: {df.shape[1]}")
+    logger.info(f"Grand Master v7 Feature engineering completed! Total columns: {df.shape[1]}")
     return df
 
 def fit_fold_unsupervised_personas(train_df, n_clusters=8, seed=SEED):
@@ -448,8 +425,7 @@ def fit_fold_unsupervised_personas(train_df, n_clusters=8, seed=SEED):
     cluster_features = [
         'arpu', 'age', 'x_90_d_activity_rate', 'bal_mean', 'bal_slope',
         'm1_inflow_total', 'm1_outflow_total', 'cash_burn_rate_m1',
-        'composite_stress_index', 'total_deficit_months_6m', 'bal_max_drawdown_ratio',
-        'bal_user_zscore_m1'
+        'composite_stress_index', 'total_deficit_months_6m', 'bal_max_drawdown_ratio'
     ]
     avail_cols = [c for c in cluster_features if c in train_df.columns]
     sub_mat = np.nan_to_num(train_df[avail_cols].values, nan=0.0)

@@ -21,8 +21,8 @@ from src.ensemble import (
     compute_logit_blend,
     compute_rank_average,
     train_stacking_meta_learner,
-    calibrate_joint_logodds,
-    apply_joint_calibration,
+    calibrate_temperature,
+    apply_temperature_scaling,
     align_prior_probability
 )
 from src.persistence import (
@@ -327,20 +327,17 @@ def main():
         # Standard Weighted Blend
         blend_oof, blend_test = compute_blend_predictions(oof_dict, test_dict, best_weights)
         blend_metrics = evaluate_predictions(y_true, blend_oof)
-        # Joint Log-Odds Calibration (Temperature + Prior Delta + Asymmetric Clamping)
-        from src.ensemble import calibrate_joint_logodds, apply_joint_calibration
-        opt_temp, opt_delta = calibrate_joint_logodds(y_true, blend_oof, train_prior=train_prior)
-        joint_cal_oof = apply_joint_calibration(blend_oof, opt_temp, opt_delta)
-        joint_cal_test = apply_joint_calibration(blend_test, opt_temp, opt_delta)
-        joint_metrics = evaluate_predictions(y_true, joint_cal_oof)
-        logger.info(f"==> JOINT LOG-ODDS CALIBRATED BLEND (T={opt_temp:.3f}, delta={opt_delta:.4f}) | Log Loss: {joint_metrics['log_loss']:.5f} | ROC-AUC: {joint_metrics['roc_auc']:.5f} <==")
+        logger.info(f"==> OPTIMAL PROBABILITY BLEND OOF | Log Loss: {blend_metrics['log_loss']:.5f} | ROC-AUC: {blend_metrics['roc_auc']:.5f} <==")
 
-        # Isotonic Regression Calibration on Blended Probabilities
-        from src.ensemble import fit_isotonic_calibrator, apply_isotonic_scaling
-        iso_cal, iso_oof = fit_isotonic_calibrator(y_true, blend_oof)
-        iso_test = apply_isotonic_scaling(iso_cal, blend_test)
-        iso_metrics = evaluate_predictions(y_true, iso_oof)
-        logger.info(f"==> ISOTONIC CALIBRATED BLEND OOF | Log Loss: {iso_metrics['log_loss']:.5f} | ROC-AUC: {iso_metrics['roc_auc']:.5f} <==")
+        # Temperature Calibration on Blended Probabilities
+        opt_temp = calibrate_temperature(y_true, blend_oof)
+        calibrated_blend_oof = apply_temperature_scaling(blend_oof, opt_temp)
+        calibrated_blend_test = apply_temperature_scaling(blend_test, opt_temp)
+        
+        # Empirical Prior Alignment
+        calibrated_blend_test = align_prior_probability(calibrated_blend_test, train_prior=train_prior)
+        calibrated_metrics = evaluate_predictions(y_true, calibrated_blend_oof)
+        logger.info(f"==> CALIBRATED BLEND (T={opt_temp:.3f})   | Log Loss: {calibrated_metrics['log_loss']:.5f} | ROC-AUC: {calibrated_metrics['roc_auc']:.5f} <==")
 
         # Logit Space Blend
         logit_oof, logit_test = compute_logit_blend(oof_dict, test_dict, best_weights)
@@ -357,9 +354,8 @@ def main():
 
         # Select best calibrated strategy for primary submission
         candidate_strategies = {
-            "joint_calibrated_blend": (joint_cal_test, joint_metrics),
-            "logit_blend": (logit_test, logit_metrics),
-            "isotonic_blend": (iso_test, iso_metrics)
+            "calibrated_blend": (calibrated_blend_test, calibrated_metrics),
+            "logit_blend": (logit_test, logit_metrics)
         }
         
         # Sort by lowest Log Loss with ROC-AUC >= 0.900
