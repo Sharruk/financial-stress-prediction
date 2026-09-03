@@ -170,6 +170,7 @@ def get_model(model_name, params=None):
         return LGBMClassifier(**default_params)
         
     elif model_name.lower() == "xgboost":
+        gpu_detected = is_gpu_available()
         default_params = {
             'n_estimators': 1800,
             'learning_rate': 0.014,
@@ -183,9 +184,9 @@ def get_model(model_name, params=None):
             'random_state': SEED,
             'n_jobs': -1,
             'eval_metric': 'logloss',
-            'early_stopping_rounds': 150,
+            'early_stopping_rounds': 100,
             'tree_method': 'hist',
-            'device': 'cuda' if GPU_AVAILABLE else 'cpu'
+            'device': 'cuda' if gpu_detected else 'cpu'
         }
         default_params.update(p)
         return XGBClassifier(**default_params)
@@ -196,19 +197,22 @@ def get_model(model_name, params=None):
         
         gpu_detected = is_gpu_available()
         default_params = {
-            'iterations': 2200,
-            'learning_rate': 0.015,
+            'iterations': 2500 if gpu_detected else 1600,
+            'learning_rate': 0.025,
             'depth': 6,
-            'l2_leaf_reg': 8.0,
-            'random_strength': 0.8,
-            'bagging_temperature': 0.2,
-            'border_count': 128,
+            'l2_leaf_reg': 6.0,
+            'random_strength': 0.7,
+            'bagging_temperature': 0.3 if gpu_detected else 1.0,
+            'border_count': 128 if gpu_detected else 254,
             'eval_metric': 'Logloss',
             'loss_function': 'Logloss',
             'random_seed': SEED,
             'verbose': 0,
-            'task_type': 'GPU' if gpu_detected else 'CPU'
+            'task_type': 'GPU' if gpu_detected else 'CPU',
+            'thread_count': -1 if not gpu_detected else None
         }
+        if default_params['thread_count'] is None:
+            del default_params['thread_count']
         
         # Check if custom devices passed or in env
         gpu_devices = os.environ.get("GPU_DEVICES", None)
