@@ -1,5 +1,5 @@
 ================================================================================
-   ZINDI FINANCIAL STRESS PREDICTION CHALLENGE - MASTER LEARNING & VIVA GUIDE (V6)
+   ZINDI FINANCIAL STRESS PREDICTION CHALLENGE - MASTER LEARNING & VIVA GUIDE (V8.2)
 ================================================================================
 
 PROJECT: Mobile-Money Liquidity Stress Prediction Challenge
@@ -16,11 +16,11 @@ STEP 1: Understanding the Business & ML Problem Formulation
 STEP 2: Dataset Anatomy & Feature Exploration (EDA)
 STEP 3: The 85/15 Imbalance Problem & Why Accuracy Fails
 STEP 4: Designing a Zero-Leakage 10-Fold Stratified Validation Harness
-STEP 5: Grand Master v6 Feature Engineering Engine (488 Total Columns)
-STEP 6: 8-Model Orthogonal Suite with CatBoost & NVIDIA RTX GPU Acceleration
-STEP 7: Dual-Metric SLSQP Blending, Temperature Calibration ($T$) & Prior Alignment
-STEP 8: Leaderboard Metrics & Mathematical Gap Analysis
-STEP 9: Execution Guide (How to Run Full 40,000-Sample Training on GPU)
+STEP 5: Grand Master v8 Feature Engineering Engine (499 Total Columns)
+STEP 6: Streamlined Top 3 GBDT Powerhouse Suite (CatBoost, XGBoost, LightGBM GOSS)
+STEP 7: Multi-Seed Bagging Matrix ([42, 1337, 2026]) & Variance Reduction
+STEP 8: Dual-Metric SLSQP Blending, Joint Log-Odds Calibration & Asymmetric Clamping
+STEP 9: Execution Guide (How to Run Full 40,000-Sample Multi-Seed Training on GPU)
 STEP 10: Master Viva / Professor Defense Q&A
 
 ================================================================================
