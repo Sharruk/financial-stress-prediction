@@ -8,12 +8,54 @@ from src.utils import evaluate_predictions, get_logger
 
 logger = get_logger()
 
+def calibrate_joint_logodds(y_true, oof_probs, train_prior=0.1500):
+    """
+    Jointly solves for optimal Temperature (T) and Log-Odds shift (delta) using Nelder-Mead:
+    P_cal = clip(expit((logit(P) + delta) / T), 0.003, 0.990)
+    Directly minimizes out-of-fold Log Loss while preserving strict ROC-AUC rank order.
+    """
+    eps = 1e-6
+    raw_logits = logit(np.clip(oof_probs, eps, 1.0 - eps))
+    
+    def loss_fn(params):
+        T, delta = params
+        T = max(0.2, T)
+        scaled_probs = np.clip(expit((raw_logits + delta) / T), 0.003, 0.990)
+        metrics = evaluate_predictions(y_true, scaled_probs)
+        prior_pen = 2.0 * (np.mean(scaled_probs) - train_prior) ** 2
+        return metrics['log_loss'] + prior_pen
+        
+    res = minimize(loss_fn, [1.0, 0.0], method='Nelder-Mead')
+    best_T, best_delta = float(res.x[0]), float(res.x[1])
+    logger.info(f"Optimal Joint Calibration: T={best_T:.4f}, delta={best_delta:.4f}")
+    return best_T, best_delta
+
+def apply_joint_calibration(probs, T, delta, lower_clip=0.003, upper_clip=0.990):
+    """Apply joint temperature scaling, prior shift, and asymmetric probability clamping."""
+    eps = 1e-6
+    raw_logits = logit(np.clip(probs, eps, 1.0 - eps))
+    calibrated = expit((raw_logits + delta) / T)
+    return np.clip(calibrated, lower_clip, upper_clip)
+
+from sklearn.isotonic import IsotonicRegression
+
+def fit_isotonic_calibrator(y_true, oof_probs):
+    """
+    Fits non-parametric monotonic isotonic regression mapping OOF probabilities to empirical truth.
+    Slashes Log Loss without degrading ROC-AUC ranking power.
+    """
+    iso = IsotonicRegression(out_of_bounds='clip', y_min=0.003, y_max=0.990)
+    iso.fit(oof_probs, y_true)
+    calibrated_oof = np.clip(iso.predict(oof_probs), 0.003, 0.990)
+    return iso, calibrated_oof
+
+def apply_isotonic_scaling(iso_reg, probs):
+    """Applies fitted isotonic calibration curve to test probabilities with safety clamping."""
+    return np.clip(iso_reg.predict(probs), 0.003, 0.990)
+
 def calibrate_temperature(y_true, oof_probs, initial_temp=1.03):
     """
     Find optimal temperature parameter T minimizing Log Loss on OOF predictions.
-    P_calibrated = Sigmoid(logit(P) / T)
-    Softens overconfident probability extremes to protect against Log Loss blowouts.
-    Preserves 100% of ROC-AUC ranking order.
     """
     eps = 1e-6
     raw_logits = logit(np.clip(oof_probs, eps, 1.0 - eps))
@@ -28,7 +70,7 @@ def calibrate_temperature(y_true, oof_probs, initial_temp=1.03):
     logger.info(f"Optimal Temperature Parameter T: {best_temp:.4f}")
     return best_temp
 
-def apply_temperature_scaling(probs, temp, lower_clip=0.002, upper_clip=0.990):
+def apply_temperature_scaling(probs, temp, lower_clip=0.003, upper_clip=0.990):
     """Apply temperature scaling with conservative safety tail bounds."""
     eps = 1e-6
     raw_logits = logit(np.clip(probs, eps, 1.0 - eps))
@@ -134,18 +176,27 @@ def compute_rank_average(oof_dict, test_dict, weights=None):
 
 def train_stacking_meta_learner(oof_dict, test_dict, y_true):
     """
-    Train a LogisticRegression meta-learner on base model OOF probabilities.
+    Train a regularized Logistic Regression meta-learner on base model OOF probabilities & log-odds.
+    Produces calibrated, multi-family blended probabilities.
     """
-    logger.info("Training Stacking Meta-Learner (Logistic Regression)...")
+    logger.info("Training Level-2 Stacking Meta-Learner (Logistic Regression on Log-Odds)...")
+    eps = 1e-6
     model_names = list(oof_dict.keys())
-    oof_matrix = np.column_stack([oof_dict[m] for m in model_names])
-    test_matrix = np.column_stack([test_dict[m] for m in model_names])
     
-    meta_model = LogisticRegression(C=0.5, random_state=42)
-    meta_model.fit(oof_matrix, y_true)
+    # Concatenate probability and log-odds representations
+    oof_probs = np.column_stack([oof_dict[m] for m in model_names])
+    test_probs = np.column_stack([test_dict[m] for m in model_names])
+    oof_logits = np.column_stack([logit(np.clip(oof_dict[m], eps, 1 - eps)) for m in model_names])
+    test_logits = np.column_stack([logit(np.clip(test_dict[m], eps, 1 - eps)) for m in model_names])
     
-    meta_oof = meta_model.predict_proba(oof_matrix)[:, 1]
-    meta_test = meta_model.predict_proba(test_matrix)[:, 1]
+    X_meta_train = np.hstack([oof_probs, oof_logits])
+    X_meta_test = np.hstack([test_probs, test_logits])
+    
+    meta_model = LogisticRegression(C=0.2, penalty='l2', solver='lbfgs', max_iter=1000, random_state=42)
+    meta_model.fit(X_meta_train, y_true)
+    
+    meta_oof = np.clip(meta_model.predict_proba(X_meta_train)[:, 1], 0.003, 0.990)
+    meta_test = np.clip(meta_model.predict_proba(X_meta_test)[:, 1], 0.003, 0.990)
     
     metrics = evaluate_predictions(y_true, meta_oof)
     logger.info(f"==> STACKING META-LEARNER OOF | Log Loss: {metrics['log_loss']:.5f} | ROC-AUC: {metrics['roc_auc']:.5f} <==")
