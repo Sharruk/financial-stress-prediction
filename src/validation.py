@@ -35,10 +35,8 @@ def preprocess_fold_features(train_fold, val_fold, test_df, target_col, seed=SEE
 
         te_col_name = f"{col}_te"
         
-        # Training target encoding with subtle Gaussian noise injection to prevent tree memorization
-        train_raw_te = X_tr[col].map(te_dict).fillna(global_target_mean).values.astype(np.float32)
-        noise = rng.normal(0, 0.005, size=len(train_raw_te)).astype(np.float32)
-        X_tr[te_col_name] = np.clip(train_raw_te + noise, 0.0, 1.0)
+        # Training target encoding matching deterministic smoothed TE on X_val & X_te
+        X_tr[te_col_name] = X_tr[col].map(te_dict).fillna(global_target_mean).astype(np.float32)
         
         # Validation & Test remain completely uncorrupted / deterministic
         X_val[te_col_name] = X_val[col].map(te_dict).fillna(global_target_mean).astype(np.float32)
