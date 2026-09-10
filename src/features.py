@@ -427,15 +427,58 @@ def engineer_features(data_df):
         bitmask += has_vol * (2 ** (6 - i))
     new_cols['activity_6m_bitmask'] = bitmask
     
+    # -------------------------------------------------------------
+    # 8. Grand Master v10: Liquidity Collapse & Emergency Dynamics
+    # -------------------------------------------------------------
+    logger.info("Computing Grand Master v10 liquidity collapse & emergency dynamics...")
+    
+    # Dynamic Estimated Days of Liquidity Runway Remaining
+    daily_outflow_m1 = (df['m1_withdraw_total_value'] + df['m1_paybill_total_value'] + df['m1_mm_send_total_value']) / 30.0
+    new_cols['m1_days_of_liquidity_runway'] = df['m1_daily_avg_bal'] / (daily_outflow_m1 + 1.0)
+    new_cols['runway_under_7d_flag'] = (new_cols['m1_days_of_liquidity_runway'] < 7.0).astype(np.float32)
+    new_cols['runway_under_14d_flag'] = (new_cols['m1_days_of_liquidity_runway'] < 14.0).astype(np.float32)
+    new_cols['runway_under_30d_flag'] = (new_cols['m1_days_of_liquidity_runway'] < 30.0).astype(np.float32)
+    
+    # Balance Depletion Acceleration (Second-order curvature)
+    new_cols['bal_accel_m1_m2_m3'] = (df['m1_daily_avg_bal'] - df['m2_daily_avg_bal']) - (df['m2_daily_avg_bal'] - df['m3_daily_avg_bal'])
+    new_cols['bal_accel_m2_m3_m4'] = (df['m2_daily_avg_bal'] - df['m3_daily_avg_bal']) - (df['m3_daily_avg_bal'] - df['m4_daily_avg_bal'])
+    new_cols['bal_accel_ratio_m1'] = new_cols['bal_accel_m1_m2_m3'] / (np.abs(new_cols['bal_accel_m2_m3_m4']) + 1.0)
+    
+    # Inflow vs Outflow Velocity Divergence
+    inflow_vel_m1_m3 = (new_cols['m1_inflow_total'] - new_cols['m3_inflow_total']) / (new_cols['m3_inflow_total'] + 1.0)
+    outflow_vel_m1_m3 = (new_cols['m1_outflow_total'] - new_cols['m3_outflow_total']) / (new_cols['m3_outflow_total'] + 1.0)
+    new_cols['cashflow_velocity_divergence'] = outflow_vel_m1_m3 - inflow_vel_m1_m3
+    
+    # Emergency Lump-Sum Panic Drain Ratios
+    new_cols['m1_withdraw_lump_sum_ratio'] = df['m1_withdraw_highest_amount'] / (df['m1_withdraw_total_value'] + 1.0)
+    new_cols['m1_transfer_lump_sum_ratio'] = df['m1_transfer_from_bank_highest_amount'] / (df['m1_transfer_from_bank_total_value'] + 1.0)
+    new_cols['m1_p2psend_lump_sum_ratio'] = df['m1_mm_send_highest_amount'] / (df['m1_mm_send_total_value'] + 1.0)
+    new_cols['m1_highest_drain_to_bal'] = (df['m1_withdraw_highest_amount'] + df['m1_mm_send_highest_amount']) / (df['m1_daily_avg_bal'] + 1.0)
+    
+    # P2P Social Support & Emergency Rescue Dynamics
+    new_cols['p2p_net_support_m1'] = df['m1_received_total_value'] - df['m1_mm_send_total_value']
+    new_cols['p2p_support_ratio_m1'] = df['m1_received_total_value'] / (df['m1_mm_send_total_value'] + 1.0)
+    new_cols['p2p_rescue_surge_m1_m2'] = df['m1_received_total_value'] / (df['m2_received_total_value'] + 1.0)
+    new_cols['p2p_rescue_surge_m1_m3'] = df['m1_received_total_value'] / (df['m3_received_total_value'] + 1.0)
+    
+    # Counterparty Concentration HHI in M1
+    cp_cols = [f'm1_{t}_{c_suffix}' for t, c_suffix in COUNTERPARTY_SUFFIX_MAP.items() if f'm1_{t}_{c_suffix}' in df.columns]
+    total_cp = df[cp_cols].sum(axis=1) + 1.0
+    cp_hhi = sum((df[col] / total_cp) ** 2 for col in cp_cols)
+    new_cols['m1_counterparty_hhi'] = cp_hhi.astype(np.float32)
+    
+    # Composite Stress Index v10
     stress_idx = (
-        (-new_cols['bal_slope'] * 0.25) +
-        (new_cols['total_deficit_months_6m'] * 0.3) +
-        (new_cols['m1_outflow_to_bal_ratio'] * 0.2) +
-        (new_cols['total_zero_activity_m1'] * 0.25) +
-        (new_cols['inflow_collapse_flag'] * 0.2) +
-        (new_cols['exhaustion_under_30d_flag'] * 0.2) +
-        (new_cols['bal_max_drawdown_ratio'] * 0.2) +
-        (new_cols['emergency_cash_spike_m1_m2'] * 0.15)
+        (-new_cols['bal_slope'] * 0.20) +
+        (new_cols['total_deficit_months_6m'] * 0.25) +
+        (new_cols['m1_outflow_to_bal_ratio'] * 0.15) +
+        (new_cols['total_zero_activity_m1'] * 0.20) +
+        (new_cols['inflow_collapse_flag'] * 0.15) +
+        (new_cols['exhaustion_under_30d_flag'] * 0.15) +
+        (new_cols['bal_max_drawdown_ratio'] * 0.15) +
+        (new_cols['emergency_cash_spike_m1_m2'] * 0.15) +
+        (new_cols['cashflow_velocity_divergence'] * 0.15) +
+        (new_cols['runway_under_14d_flag'] * 0.20)
     )
     new_cols['composite_stress_index'] = stress_idx
     
@@ -446,7 +489,7 @@ def engineer_features(data_df):
     num_cols = df.select_dtypes(include=[np.number]).columns
     df[num_cols] = df[num_cols].replace([np.inf, -np.inf], np.nan).fillna(0.0)
     
-    logger.info(f"Grand Master v9 Feature engineering completed! Total columns: {df.shape[1]}")
+    logger.info(f"Grand Master v10 Feature engineering completed! Total columns: {df.shape[1]}")
     return df
 
 def fit_fold_unsupervised_personas(train_df, n_clusters=8, seed=SEED):

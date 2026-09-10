@@ -41,14 +41,15 @@ def parse_args():
     parser.add_argument(
         "--models",
         nargs="+",
-        default=["catboost", "xgboost", "lightgbm_goss"],
-        help="List of models to train (default: ['catboost', 'xgboost', 'lightgbm_goss'])"
+        default=["catboost", "xgboost", "lightgbm_goss", "lightgbm_dart", "pytorch_mlp"],
+        help="List of models to train (default: ['catboost', 'xgboost', 'lightgbm_goss', 'lightgbm_dart', 'pytorch_mlp'])"
     )
     parser.add_argument("--smoke-test", action="store_true", help="Run fast GPU/CPU smoke test to verify pipeline & hardware")
     parser.add_argument("--quick", action="store_true", help="Run quick baseline mode with fewer iterations on subsample")
     parser.add_argument("--folds", type=int, default=10, help="Number of cross-validation folds (default: 10)")
     parser.add_argument("--seed", type=int, default=SEED, help="Primary random seed")
     parser.add_argument("--multi-seed", action="store_true", default=False, help="Run multi-seed bagging [42, 1337, 2026] (default: False)")
+    parser.add_argument("--single-seed", dest="multi_seed", action="store_false", help="Run single-seed mode")
     parser.add_argument("--gpu", action="store_true", default=True, help="Explicitly enable GPU acceleration for models (default: True)")
     parser.add_argument("--cpu", action="store_true", help="Force CPU execution")
     parser.add_argument("--devices", type=str, default=None, help="GPU devices string (e.g. '0' or '0:1' for T4 x 2)")
@@ -165,7 +166,7 @@ def main():
     seeds = [42, 1337, 2026] if args.multi_seed else [args.seed]
 
     logger.info("==========================================================")
-    logger.info("   ZINDI FINANCIAL STRESS PREDICTION - GRAND MASTER V8   ")
+    logger.info("   ZINDI FINANCIAL STRESS PREDICTION - GRAND MASTER V10  ")
     logger.info(f"   Mode: {'QUICK (10k sample)' if args.quick else 'FULL DATA (40,000 samples)'} | Folds: {n_splits} | Seeds: {seeds}")
     logger.info("==========================================================")
 
@@ -177,7 +178,7 @@ def main():
         train_df = train_df.sample(n=10000, random_state=args.seed).reset_index(drop=True)
 
     # 2. Engineer Features
-    logger.info("Running Grand Master v8 Feature Engineering Pipeline on Train and Test...")
+    logger.info("Running Grand Master v10 Feature Engineering Pipeline on Train and Test...")
     train_fe = engineer_features(train_df)
     test_fe = engineer_features(test_df)
 
@@ -363,13 +364,16 @@ def main():
             "logit_blend": (logit_test, logit_metrics)
         }
         
-        # Sort by lowest Log Loss with ROC-AUC >= 0.900
-        best_strat_name = min(candidate_strategies.keys(), key=lambda k: candidate_strategies[k][1]['log_loss'])
+        # Select best calibrated strategy based on estimated Zindi Multi Score
+        def est_zindi_score(m):
+            return 0.3223 * m['roc_auc'] - 1.0708 * m['log_loss'] + 0.6859
+            
+        best_strat_name = max(candidate_strategies.keys(), key=lambda k: est_zindi_score(candidate_strategies[k][1]))
         best_test_preds, strategy_metrics = candidate_strategies[best_strat_name]
         final_oof_loss = strategy_metrics['log_loss']
         final_oof_auc = strategy_metrics['roc_auc']
         selected_strategy = best_strat_name
-        logger.info(f"Selected {best_strat_name.upper()} for final primary submission (Log Loss: {final_oof_loss:.5f}, ROC-AUC: {final_oof_auc:.5f}).")
+        logger.info(f"Selected {best_strat_name.upper()} for final primary submission (Log Loss: {final_oof_loss:.5f}, ROC-AUC: {final_oof_auc:.5f}, Est Zindi Score: {est_zindi_score(strategy_metrics):.5f}).")
 
         # Persist ensemble config
         save_ensemble_config(
@@ -426,8 +430,8 @@ def main():
         "timestamp": run_ts,
         "git_commit": get_git_commit(),
         "model": "ensemble" if selected_strategy != "single_model" else list(test_dict.keys())[0],
-        "model_version": "v6_ultimate_grandmaster",
-        "feature_version": "v6",
+        "model_version": "v10_grandmaster",
+        "feature_version": "v10",
         "feature_count": len(train_fe.columns) - 1,
         "cv_folds": n_splits,
         "seeds": seeds,
@@ -443,7 +447,7 @@ def main():
         },
         "training_time": None,
         "status": "completed",
-        "notes": f"Grand Master v6 10-Fold 4-Model Multi-Seed Ensemble (Seeds {seeds}, Folds {n_splits})"
+        "notes": f"Grand Master v10 10-Fold Multi-Family Ensemble (Seeds {seeds}, Folds {n_splits})"
     }
 
     experiment_record["_base_models"] = [

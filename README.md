@@ -66,12 +66,12 @@ However, the competition is still ongoing and the final model/competition result
 ## Current Zindi Result
 
 Current best displayed public score:  
-**0.704044593**  
-*(Approximately **0.7040**)*
+**0.720992331**  
+*(Rank: **60** | Log Loss: **0.241713676** | ROC-AUC: **0.91184304**)*
 
-Submitter: **NathanielC**
+Team: **sem_5** (Sharruk S, Shalini M, Nathaniel Christian)
 
-> This is the current best public Zindi score at this stage of the competition. It is NOT the final competition result. The README will be updated after the competition ends.
+> Verified active on Zindi Leaderboard. Grand Master v10 multi-family architecture and exact-metric SLSQP blending deployed to target the Top 10 (Rank 1: 0.73937).
 
 ## Project Pipeline
 

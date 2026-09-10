@@ -13,7 +13,7 @@
 > 
 > *Our project builds an end-to-end Machine Learning intelligence pipeline that monitors 6 months of historical mobile-money behavior to predict financial distress 30 days before it occurs.*  
 > 
-> *We engineered 502 domain-specific financial physics features (such as Cashflow Elasticity, Balance Drawdown, and Emergency Cash Drains) and combined 5 distinct model families—CatBoost GPU, XGBoost, LightGBM GOSS, a Deep PyTorch Tabular ResNet Neural Network, and a Level-2 Stacking Meta-Learner—to achieve a competitive ROC-AUC exceeding 0.915 and a Log Loss near 0.24."*
+> *We engineered 525 domain-specific financial physics features (such as Dynamic Liquidity Runway, Balance Curvature Acceleration, Cashflow Elasticity, and Emergency Cash Drains) and combined 5 distinct model families—CatBoost GPU, XGBoost, LightGBM DART, a Deep PyTorch Tabular ResNet Neural Network, and a Level-2 Stacking Meta-Learner—to achieve our current verified milestone of **0.72099 (Rank 60)** on Zindi, targeting Rank 1 (0.73937)."*
 
 ---
 
@@ -34,20 +34,30 @@
 
 ---
 
-## 🔬 STEP 3: What We Learnt & Built: Feature Engineering Engine (502 Features)
+## 🔬 STEP 3: What We Learnt & Built: Feature Engineering Engine (525 Features)
 
-Raw transaction counts and totals are not enough. Machine learning models need **behavioral dynamics** and **financial physics**. We engineered 502 features in `src/features.py`:
+Raw transaction counts and totals are not enough. Machine learning models need **behavioral dynamics** and **financial physics**. We engineered 525 features in `src/features.py`:
 
-### 1. Cashflow Elasticity ($\rho$)
+### 1. Dynamic Liquidity Runway Ratio
+* **What it means:** We calculate estimated days remaining before the customer's cash runs out at their current M1 burn rate:
+  $$\text{Runway} = \frac{\text{m1\_daily\_avg\_bal}}{\text{Daily Outflow}_{M1} + 1.0}$$
+* **Why it matters:** Flags whether a customer will reach a balance of zero in under 7, 14, or 30 days.
+
+### 2. Balance Depletion Acceleration (Second Derivative)
+* **What it means:** Rather than just measuring balance loss, we calculate the acceleration of balance collapse:
+  $$\Delta^2 \text{Balance} = (\text{Bal}_{M1} - \text{Bal}_{M2}) - (\text{Bal}_{M2} - \text{Bal}_{M3})$$
+* **Why it matters:** Catches customers whose financial decline is compounding exponentially rather than dropping linearly.
+
+### 3. Cashflow Elasticity ($\rho$)
 * **What it means:** We calculate the mathematical Pearson correlation between a customer's monthly income (deposits + bank transfers) and outflows (paybills + merchant spending) across all 6 months.
 * **Why it matters:** Healthy individuals cut spending when income drops ($\rho \approx +1.0$). Individuals heading toward collapse continue spending out of desperation even when inflows dry up ($\rho \le 0$).
 
-### 2. Personal Historical $Z$-Score
+### 4. Personal Historical $Z$-Score
 * **What it means:** We compare a customer's current balance in Month 1 against their own 6-month mean and standard deviation:
   $$Z_{\text{user}} = \frac{\text{Balance}_{M1} - \mu_{6m}}{\sigma_{6m} + 1.0}$$
 * **Why it matters:** An absolute balance of \$100 might be normal for a student, but for a business owner whose normal balance is \$5,000, \$100 represents a catastrophic 5-sigma collapse.
 
-### 3. Emergency Cash Drain Acceleration
+### 5. Emergency Cash Drain Acceleration
 * **What it means:** We track sudden spikes in physical ATM withdrawals and bank transfers relative to commercial spending:
   $$\text{Emergency Spike} = \frac{\text{Withdrawals}_{M1} + \text{Bank Transfers}_{M1}}{\text{Withdrawals}_{M2} + \text{Bank Transfers}_{M2} + 1.0}$$
 * **Why it matters:** When people panic, they extract physical cash to hoard or pay emergency obligations.
@@ -108,6 +118,9 @@ Instead of relying on a single model, we built a diverse ensemble across orthogo
 
 ### Q5: "What is Log Loss and why is probability calibration necessary?"
 > *"Log Loss measures the negative log-likelihood of true labels given predicted probabilities: $-\frac{1}{N}\sum [y\ln(p) + (1-y)\ln(1-p)]$. If a model predicts 0.99 for someone who does not experience stress, Log Loss penalizes it heavily. Calibration aligns predicted probabilities with empirical true rates using temperature scaling and tail clamping."*
+
+### Q6: "How is the Zindi competition scored, and why is Log Loss prioritized?"
+> *"Sir, mathematical regression across public leaderboard submissions reveals the exact scoring formula: $\text{Score} \approx 0.3223 \times \text{ROC\_AUC} - 1.0708 \times \text{LogLoss} + 0.6859$. The penalty on Log Loss ($1.0708$) is over 3.3 times higher than the reward on ROC-AUC ($0.3223$). Therefore, our Level-2 SLSQP ensemble optimizer directly minimizes $1.0708 \times \text{LogLoss} - 0.3223 \times \text{ROC\_AUC}$ and uses Temperature Scaling to eliminate probability overconfidence."*
 
 ---
 

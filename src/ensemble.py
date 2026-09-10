@@ -113,8 +113,8 @@ def optimize_ensemble_weights(oof_dict, y_true):
         weights = weights / (np.sum(weights) + 1e-9)
         blend_oof = np.dot(oof_matrix, weights)
         metrics = evaluate_predictions(y_true, blend_oof)
-        # Zindi Multi Score objective: combined loss
-        return metrics['log_loss'] - 0.12 * metrics['roc_auc']
+        # Exact Zindi Multi-Score optimization: 1.0708 * LogLoss - 0.3223 * ROC_AUC
+        return 1.0708 * metrics['log_loss'] - 0.3223 * metrics['roc_auc']
         
     initial_weights = np.ones(n_models) / n_models
     bounds = [(0.0, 1.0) for _ in range(n_models)]
@@ -176,23 +176,34 @@ def compute_rank_average(oof_dict, test_dict, weights=None):
 
 def train_stacking_meta_learner(oof_dict, test_dict, y_true):
     """
-    Train a regularized Logistic Regression meta-learner on base model OOF probabilities & log-odds.
-    Produces calibrated, multi-family blended probabilities.
+    Train a regularized Level-2 Stacking Meta-Learner on base model OOF probabilities,
+    log-odds, normalized percentiles, and inter-model disagreement dispersion.
+    Produces robust, multi-family calibrated probabilities.
     """
-    logger.info("Training Level-2 Stacking Meta-Learner (Logistic Regression on Log-Odds)...")
+    logger.info("Training Level-2 Stacking Meta-Learner (Logistic Regression on Multi-Family Signals)...")
     eps = 1e-6
     model_names = list(oof_dict.keys())
     
-    # Concatenate probability and log-odds representations
+    # 1. Raw Probability & Logit representations
     oof_probs = np.column_stack([oof_dict[m] for m in model_names])
     test_probs = np.column_stack([test_dict[m] for m in model_names])
-    oof_logits = np.column_stack([logit(np.clip(oof_dict[m], eps, 1 - eps)) for m in model_names])
-    test_logits = np.column_stack([logit(np.clip(test_dict[m], eps, 1 - eps)) for m in model_names])
+    oof_logits = np.column_stack([logit(np.clip(oof_dict[m], eps, 1.0 - eps)) for m in model_names])
+    test_logits = np.column_stack([logit(np.clip(test_dict[m], eps, 1.0 - eps)) for m in model_names])
     
-    X_meta_train = np.hstack([oof_probs, oof_logits])
-    X_meta_test = np.hstack([test_probs, test_logits])
+    # 2. Normalized Empirical Ranks
+    oof_ranks = np.column_stack([rankdata(oof_dict[m]) / len(oof_dict[m]) for m in model_names])
+    test_ranks = np.column_stack([rankdata(test_dict[m]) / len(test_dict[m]) for m in model_names])
     
-    meta_model = LogisticRegression(C=0.2, penalty='l2', solver='lbfgs', max_iter=1000, random_state=42)
+    # 3. Inter-Model Disagreement Dispersion (standard deviation & range across models)
+    oof_std = np.std(oof_probs, axis=1, keepdims=True)
+    test_std = np.std(test_probs, axis=1, keepdims=True)
+    oof_range = (np.max(oof_probs, axis=1, keepdims=True) - np.min(oof_probs, axis=1, keepdims=True))
+    test_range = (np.max(test_probs, axis=1, keepdims=True) - np.min(test_probs, axis=1, keepdims=True))
+    
+    X_meta_train = np.hstack([oof_probs, oof_logits, oof_ranks, oof_std, oof_range])
+    X_meta_test = np.hstack([test_probs, test_logits, test_ranks, test_std, test_range])
+    
+    meta_model = LogisticRegression(C=0.25, penalty='l2', solver='lbfgs', max_iter=1000, random_state=42)
     meta_model.fit(X_meta_train, y_true)
     
     meta_oof = np.clip(meta_model.predict_proba(X_meta_train)[:, 1], 0.003, 0.990)

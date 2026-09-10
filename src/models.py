@@ -149,6 +149,26 @@ def get_model(model_name, params=None):
         }
         default_params.update(p)
         return LGBMClassifier(**default_params)
+
+    elif model_name.lower() == "lightgbm_dart":
+        default_params = {
+            'boosting_type': 'dart',
+            'n_estimators': 1800,
+            'learning_rate': 0.025,
+            'num_leaves': 45,
+            'max_depth': 7,
+            'drop_rate': 0.10,
+            'skip_drop': 0.50,
+            'colsample_bytree': 0.60,
+            'reg_alpha': 0.5,
+            'reg_lambda': 4.0,
+            'scale_pos_weight': 1.0,
+            'random_state': SEED + 42,
+            'n_jobs': -1,
+            'verbose': -1
+        }
+        default_params.update(p)
+        return LGBMClassifier(**default_params)
         
     elif model_name.lower() == "xgboost":
         gpu_detected = is_gpu_available()
@@ -254,33 +274,58 @@ class LogisticRegressionWrapper:
         return self.clf.predict_proba(X_scaled)
 
 
+import copy
+
 class PyTorchMLPWrapper:
-    """Scikit-learn compatible wrapper for PyTorch Tabular ResNet Neural Network with auto GPU."""
+    """Scikit-learn compatible wrapper for PyTorch Tabular ResNet Neural Network with auto GPU & early stopping."""
     def __init__(self, params=None):
         self.params = params or {}
-        self.epochs = self.params.get('epochs', 30)
+        self.epochs = self.params.get('epochs', 35)
         self.lr = self.params.get('lr', 1e-3)
         self.batch_size = self.params.get('batch_size', 256)
         self.hidden_dim = self.params.get('hidden_dim', 256)
-        self.dropout = self.params.get('dropout', 0.2)
+        self.dropout = self.params.get('dropout', 0.25)
+        self.patience = self.params.get('patience', 8)
         self.device = TORCH_DEVICE
         self.scaler = StandardScaler()
         self.model = None
         
     def fit(self, X, y, eval_set=None, early_stopping_rounds=None, verbose=False):
         X_scaled = self.scaler.fit_transform(np.nan_to_num(X, nan=0.0))
-        y_tensor = torch.tensor(y.values if hasattr(y, 'values') else y, dtype=torch.float32)
+        y_raw = y.values if hasattr(y, 'values') else y
+        y_tensor = torch.tensor(y_raw, dtype=torch.float32)
         X_tensor = torch.tensor(X_scaled, dtype=torch.float32)
         
         dataset = TensorDataset(X_tensor, y_tensor)
         dataloader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
         
+        # Validation set for early stopping
+        val_loader = None
+        if eval_set is not None:
+            if isinstance(eval_set, list) and len(eval_set) > 0:
+                X_v, y_v = eval_set[0]
+            else:
+                X_v, y_v = eval_set
+            X_v_scaled = self.scaler.transform(np.nan_to_num(X_v, nan=0.0))
+            y_v_raw = y_v.values if hasattr(y_v, 'values') else y_v
+            val_dataset = TensorDataset(
+                torch.tensor(X_v_scaled, dtype=torch.float32),
+                torch.tensor(y_v_raw, dtype=torch.float32)
+            )
+            val_loader = DataLoader(val_dataset, batch_size=self.batch_size * 2, shuffle=False)
+            
         self.model = TabularResMLP(input_dim=X.shape[1], hidden_dim=self.hidden_dim, dropout=self.dropout).to(self.device)
         optimizer = optim.AdamW(self.model.parameters(), lr=self.lr, weight_decay=1e-4)
+        scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=self.epochs, eta_min=1e-5)
         criterion = nn.BCELoss()
         
-        self.model.train()
+        best_val_loss = float('inf')
+        best_weights = None
+        patience_counter = 0
+        effective_patience = early_stopping_rounds or self.patience
+        
         for epoch in range(self.epochs):
+            self.model.train()
             for batch_x, batch_y in dataloader:
                 batch_x = batch_x.to(self.device)
                 batch_y = batch_y.to(self.device)
@@ -289,6 +334,35 @@ class PyTorchMLPWrapper:
                 loss = criterion(out, batch_y)
                 loss.backward()
                 optimizer.step()
+                
+            scheduler.step()
+            
+            # Validation evaluation
+            if val_loader is not None:
+                self.model.eval()
+                val_loss_total = 0.0
+                val_samples = 0
+                with torch.no_grad():
+                    for vx, vy in val_loader:
+                        vx = vx.to(self.device)
+                        vy = vy.to(self.device)
+                        vout = self.model(vx)
+                        val_loss_total += criterion(vout, vy).item() * len(vy)
+                        val_samples += len(vy)
+                avg_val_loss = val_loss_total / (val_samples + 1e-9)
+                
+                if avg_val_loss < best_val_loss:
+                    best_val_loss = avg_val_loss
+                    best_weights = copy.deepcopy(self.model.state_dict())
+                    patience_counter = 0
+                else:
+                    patience_counter += 1
+                    if patience_counter >= effective_patience:
+                        break
+                        
+        if best_weights is not None:
+            self.model.load_state_dict(best_weights)
+            
         return self
 
     def predict_proba(self, X):
@@ -297,4 +371,5 @@ class PyTorchMLPWrapper:
         self.model.eval()
         with torch.no_grad():
             probs = self.model(X_tensor).cpu().numpy()
-        return np.column_stack([1 - probs, probs])
+        probs = np.clip(probs, 0.003, 0.990)
+        return np.column_stack([1.0 - probs, probs])

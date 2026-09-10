@@ -102,6 +102,8 @@ def train_cv_model(model_name, train_df, test_df, model_params=None, n_splits=N_
                 model.fit(X_tr, y_tr, eval_set=[(X_val, y_v)], verbose=False)
             except Exception:
                 model.fit(X_tr, y_tr)
+        elif model_name.lower() in ["pytorch_mlp", "tabular_mlp"]:
+            model.fit(X_tr, y_tr, eval_set=(X_val, y_v), early_stopping_rounds=8, verbose=False)
         else:
             model.fit(X_tr, y_tr)
 
